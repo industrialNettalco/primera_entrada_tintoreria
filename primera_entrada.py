@@ -51,10 +51,12 @@ def get_color_from_matching(color):
     print(new_color)
     return new_color
 
-def get_recipes_by_color(color):
+def get_recipes_by_color(color, receta):
     recipe_df = pd.DataFrame()
     #recipe_df = db_data2.get_recipe_from_carton_laboratorio(color)
     recipe_df = db_data2.get_recipes_complete(color)
+    if not recipe_df.empty:
+        recipe_df = recipe_df[recipe_df['TCODIRECE'] != receta]
     if recipe_df.empty:
         #recipe_df = db_data2.get_recipes_complete(color)
         if recipe_df.empty:
@@ -420,7 +422,8 @@ def decide_by_observation_gemini_two(receta_df, comparacion_df, comparacion_lote
 
 def decide_by_observation_gemini_three(colorantes_df, comparacion_lote_df, lote_receta):
     model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
-
+    list_observations = colorantes_df[colorantes_df["FLAG_OBS"] == True]["TOBS"].tolist()
+    color_observations = ", ".join(list_observations)
     #receta_df = receta_df[['TCODIPROD','TCODIAGRP', 'TDESCPROD', 'COLORANTE_AJUSTADO']]
     #tabla_receta_colorantes = receta_df.to_markdown(index=False)
     #tabla_comparacion_colorantes = comparacion_df.to_markdown(index=False)
@@ -430,7 +433,20 @@ def decide_by_observation_gemini_three(colorantes_df, comparacion_lote_df, lote_
 
     contexto_lote = ""
     regla_lote = ""
-    if comparacion_lote_df['TLOTECOMP'].iloc[0] is not None and comparacion_lote_df['TLOTECOMP'].iloc[0] == lote_receta:
+    lote_intensidad = ""
+    lote_matiz = ""
+    
+    if comparacion_lote_df['TLOTECOMP'].iloc[0] is not None and comparacion_lote_df['TLOTECOMP'].iloc[0] != lote_receta:
+        if comparacion_lote_df['TPORCINTE'].iloc[0] != 0:
+            valor = comparacion_lote_df['TPORCINTE'].iloc[0]
+            valor = valor * -1
+            lote_intensidad = "aplicar " + str(valor) + "% de intensidad"
+        
+        if comparacion_lote_df['TINDIMATZ'].iloc[0].strip() != '=':
+            color_matiz = comparacion_lote_df['TINDIMATZ'].iloc[0].strip()
+            valor_matiz = comparacion_lote_df['TPORCMATZ'].iloc[0]
+            valor_matiz = valor_matiz * -1
+            lote_matiz = "aplicar " + str(valor_matiz) + "% al color " + color_matiz
         contexto_lote = F"""
         2. COMPARACION LOTE STD: Proporciona ajustes estructurados en 3 columnas:
         - TINDIMATZ: Matiz a modificar (AM/AZ/RO/=).
@@ -460,10 +476,19 @@ def decide_by_observation_gemini_three(colorantes_df, comparacion_lote_df, lote_
     --- REGLAS DE AJUSTE ---
     A) INTENSIDAD (aplica a TODOS los colorantes):
     - Si TOBS contiene "x% más/menos intenso" o sinónimos: aplicar inverso (ej: "x% más intenso" → disminuir x%.).
+    - Si TPORCINTE contiene "-3" o "2" aplicar el inverso (ej: "-3" -> aumentar 3%)
 
-    B) MATIZ (aplica SOLO al color mencionado):
-    - Si TOBS contiene "% más/menos [color]": buscar en TDESCPROD y aplicar inverso.
-    - Si TINDIMATZ ≠ "=": aplicar TPORCMATZ al matiz especificado.
+    B) MATIZ (solo para el color mencionado):
+    - Si TOBS indica "% más/menos [color]":  
+    1. **Buscar en TODAS las filas de TDESCPROD** (no solo en la fila de la observación) coincidencias EXACTAS con el color mencionado (ej: "azul" ≠ "azul marino").  
+    2. **Aplicar el ajuste inverso a TODOS los colorantes que coincidan** con el nombre exacto del color.  
+    - Si TINDIMATZ ≠ "=": invertir TPORCMATZ para el matiz indicado (usando misma búsqueda global en TDESCPROD). 
+
+    **EJEMPLO CLAVE**:  
+    - Si TOBS en fila 2 dice "5% +azul":  
+    a) Escanear TODOS los TDESCPROD de la tabla.  
+    b) Aplicar -5% **solo** a filas donde TDESCPROD sea exactamente "azul".  
+    c) **NO Aplicar** si el color no es exactamente "azul" ej: ("azul turquesa", "azul marino") 
 
     C) PRIORIDADES:
     1. Aplicar primero intensidad, luego matiz.
@@ -483,7 +508,7 @@ def decide_by_observation_gemini_three(colorantes_df, comparacion_lote_df, lote_
         * TOBS
     - porcentajes de intensidad y matiz aplicados
     - COLUMNA FINAL: 'COL_FINAL' (resultado calculado).
-        * Los valores deben redondearse a 6 decimales en todos los casos
+        * Los valores deben redondearse a 4 decimales en todos los casos
     """
 
     print("contexto para la ia:")
@@ -492,6 +517,83 @@ def decide_by_observation_gemini_three(colorantes_df, comparacion_lote_df, lote_
     respuesta_texto = response.text
     return respuesta_texto
 
+def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_receta):
+    model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
+    tabla_colorantes = colorantes_df[["TCODIPROD", "TDESCPROD", "TCONCPROD", "COLORANTE_AJUSTADO"]]
+    tabla_colorantes = tabla_colorantes.to_markdown(index=False)
+    list_observations = colorantes_df[colorantes_df["FLAG_OBS"] == True]["TOBS"].tolist()
+    
+    color_observations = "Sin ajuste"
+    if len(list_observations) != 0:
+        color_observations = ", ".join(list_observations)
+
+    lote_intensidad = "Sin ajuste de intensidad"
+    lote_matiz = "Sin ajuste de matiz"
+    
+    if comparacion_lote_df['TLOTECOMP'].iloc[0] is not None and comparacion_lote_df['TLOTECOMP'].iloc[0] == lote_receta:
+        if comparacion_lote_df['TPORCINTE'].iloc[0] != 0:
+            valor = comparacion_lote_df['TPORCINTE'].iloc[0]
+            valor = valor * -1
+            lote_intensidad = "aplicar " + str(valor) + "% de intensidad"
+        
+        if comparacion_lote_df['TINDIMATZ'].iloc[0].strip() != '=':
+            color_matiz = comparacion_lote_df['TINDIMATZ'].iloc[0].strip()
+            valor_matiz = comparacion_lote_df['TPORCMATZ'].iloc[0]
+            valor_matiz = valor_matiz * -1
+            lote_matiz = "aplicar " + str(valor_matiz) + "% al color " + color_matiz
+
+    context = f"""
+    OBJETIVO: Ajustar automáticamente los valores de 'COLORANTE_AJUSTADO' basado en observaciones de tablas de referencia y devolver la tabla final con los resultados.
+
+    --- TABLAS DE ENTRADA ---
+    1. TABLA DE COLORANTES: Contiene los colorantes ajustados, a esta tabla se le aplicaran los ajuste
+
+    --- REGLAS DE AJUSTE ---
+    A) INTENSIDAD:
+    - Aplicar ajuste a TODOS los colorantes
+
+    B) MATIZ:
+    - solo para el color mencionado
+    - Tener en cuenta lo siguiente al aplicar ajuste:
+        - Si hay 2 colores similares ejemplo 1 rojo y otro rojo vino y el ajuste dice 3% +rojo, entonces aplicar solo al primer rojo, no deberia aplicar al rojo vino
+        - Si en caso diga 2% +rojo y en los colorantes no hay ninguno que diga solo rojo, pero hay otro que dice rojo vino, aplicar a este al ser el más cercano
+
+    C) PRIORIDADES:
+    1. Aplicar primero intensidad, luego matiz.
+    2. Habrá ajuste por comparacion de colorantes y por comparacion de lote
+    3. En la comparación de colorantes aplicar el inverso (ej: 2% +rojo -> se debe aplicar -2% rojo)
+    4. En el ajuste de comparacion de lote si aplicar lo que indica
+
+    **IMPORTANTE** Aplicar: %Colorante Estimado = %Colorante Ajustado RB × (1 ± x%)  
+
+    --- FORMATO DE SALIDA ---
+    RESPUESTA TEXTUAL ÚNICA:
+    1. Explicación breve y resumida de cambios aplicados, señalar porcentajes encontrados y aplicados.
+    2. Mencionar si se aplica ajuste por colorantes, lote, ambos o ninguno; esto en letras grandes y/o en negrita
+    2. TABLA FINAL con las siguientes columnas:
+    - Todas las columnas originales de tabla de colorantes más 2 columnas de matiz e intensidad que se aplicarán:
+        * AJUSTE_INTENSIDAD
+        * AJUSTE_MATIZ
+    - COLUMNA FINAL: 'COL_FINAL' (resultado calculado).
+        * Los valores deben redondearse a 4 decimales en todos los casos
+
+    ---------------------------------
+    *TABLA DE COLORANTES*
+    {tabla_colorantes}
+
+    *AJUSTE COMPARACION DE COLORANTES*
+    {color_observations}
+
+    *AJUSTE COMPARACION DE LOTE*
+    {lote_intensidad}
+    {lote_matiz}
+    """
+
+    print("contexto para la ia:")
+    print(context)
+    response = model.generate_content(context)
+    respuesta_texto = response.text
+    return respuesta_texto
 
 
 if "manual_ol_df" not in st.session_state:
@@ -562,7 +664,7 @@ def show_frontend():
         comparacion_lote_est_df = pd.DataFrame()
 
         while again:
-            receta_base_df = get_recipes_by_color(ol["CODIGO_COLOR"])
+            receta_base_df = get_recipes_by_color(ol["CODIGO_COLOR"], ol["RECETA"])
             
             for recipe in bad_recipes:
                 receta_base_df = receta_base_df[receta_base_df["TCODIRECE"] != recipe]
@@ -609,7 +711,7 @@ def show_frontend():
             receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df = get_finals_dfs(receta_base_df['TCODIRECE'].iloc[0], ol['LOTE_STD'])
             if receta_colorantes_df.empty:
                 bad_recipes.append(receta_base_df['TCODIRECE'].iloc[0])
-                st.warning("No hay datos de colorantes para esta receta."   )
+                st.warning("No hay datos de colorantes para esta receta.")
                 again = False
                 return 
             else: 
@@ -618,10 +720,8 @@ def show_frontend():
         st.markdown("Colorante ajustado por Relación de Baño")
         st.markdown(receta_colorantes_df.to_markdown())
 
-
-        with st.spinner("IA analizando un momento por favor..."):
-            print(receta_base_df["TCODILOTE"].iloc[0])
-            chat_response = decide_by_observation_gemini_three(receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
+        with st.spinner("IA analizando, un momento por favor..."):
+            chat_response = decide_by_observation_gemini_four(receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
 
             st.markdown(chat_response)
 
@@ -631,3 +731,20 @@ st.set_option('deprecation.showPyplotGlobalUse', False)
 st.title("Análisis de Matizado - Primera Entrada")
 
 show_frontend()
+
+with st.sidebar:
+    st.header("Creación de OLs")
+    uploaded_file = st.file_uploader(
+        "Sube tu archivo CSV o Excel",
+        type=['csv', 'xlsx', 'xls'],
+        accept_multiple_files=False,
+        key="file_uploader"
+    )
+
+    opciones = ["Opción 1", "Opción 2", "Opción 3"]
+    seleccion = st.selectbox(
+        "Selecciona una opción:",
+        options=opciones,
+        index=0,  # Opción por defecto (la primera)
+        key="sidebar_selectbox"
+    )

@@ -293,6 +293,8 @@ def get_colors_from_cod_agr(codi_agru):
             return pd.DataFrame()
     return None
 
+print(get_colors_from_cod_agr(1007777))
+
 #print("esta esss")
 #use_color= get_colors_from_cod_agr("127763")
 #print(get_colors_from_cod_agr("4187"))
