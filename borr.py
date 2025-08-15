@@ -9,6 +9,9 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 import streamlit as st
 import cx_Oracle
+import pymysql
+
+# --------------------- CONFIGURACIONES ------------------------
 
 # Cargar las variables de entorno desde el archivo .env
 warnings.filterwarnings("ignore")
@@ -26,8 +29,26 @@ DB_HOST = os.getenv("DB_NET_HOST")
 DB_PORT = os.getenv("DB_NET_PORT")
 DB_NAME = os.getenv("DB_NET_NAME")
 
+DB_PRENDAS_USER = os.getenv("DB_PRENDAS_USER")
+DB_PRENDAS_PASSWORD = os.getenv("DB_PRENDAS_PASSWORD")
+DB_PRENDAS_HOST = os.getenv("DB_PRENDAS_HOST")
+DB_PRENDAS_PORT = os.getenv("DB_PRENDAS_PORT")
+DB_PRENDAS_NAME = os.getenv("DB_PRENDAS_NAME")
+
 dsn = cx_Oracle.makedsn(DB_HOST, DB_PORT, sid=DB_NAME)
 connection = cx_Oracle.connect(user=DB_USER, password=DB_PASSWORD, dsn=dsn)
+
+db_config = {
+    'host': DB_PRENDAS_HOST,
+    'port': int(DB_PRENDAS_PORT),
+    'user': DB_PRENDAS_USER,
+    'password': DB_PRENDAS_PASSWORD,
+    'database': DB_PRENDAS_NAME,
+    'charset': 'utf8mb4',
+    'collation': 'utf8mb4_general_ci'
+}
+
+# -------------------------------------------------------------------
 
 def get_recipes_by_colors(colors):
     recipes_df = pd.DataFrame()
@@ -115,7 +136,8 @@ def filter_by_ep(data_df, ep):
 
 def filter_by_repro(data_df):
     df = data_df.copy()
-    df = df[~df['TRECE_SEQ'].str.contains('REPRO', na=False)]
+    df = df[~df['TRECE_SEQ'].str.contains('REPRO', case=False, na=False)]
+    df = df[~df['TAUXIRECE'].str.contains('REPRO', case=False, na=False)]
     df = df[df['TCODIRECE'].str.startswith('SL')]
     if df.empty:
         return data_df
@@ -289,7 +311,7 @@ def get_finals_dfs(recipe, ol_lote_std):
 
 def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_receta):
     model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
-    tabla_colorantes = colorantes_df[["TCODIPROD", "TDESCPROD", "TCONCPROD", "COLORANTE_AJUSTADO"]]
+    tabla_colorantes = colorantes_df[["TCODIPROD", "TDESCPROD", "TCONCPROD", "AJUTE_RB", "CONC_RB"]]
     tabla_colorantes = tabla_colorantes.to_markdown(index=False)
     list_observations = colorantes_df[colorantes_df["FLAG_OBS"] == True]["TOBS"].tolist()
     
@@ -313,7 +335,7 @@ def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_r
             lote_matiz = "aplicar " + str(valor_matiz) + "% al color " + color_matiz
 
     context = f"""
-    OBJETIVO: Ajustar automáticamente los valores de 'COLORANTE_AJUSTADO' basado en observaciones de tablas de referencia y devolver la tabla final con los resultados.
+    OBJETIVO: Ajustar automáticamente los valores de 'CONC_RB' basado en observaciones de tablas de referencia y devolver la tabla final con los resultados.
 
     --- TABLAS DE ENTRADA ---
     1. TABLA DE COLORANTES: Contiene los colorantes ajustados, a esta tabla se le aplicaran los ajuste
@@ -337,8 +359,8 @@ def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_r
     **IMPORTANTE** Aplicar: %Colorante Estimado = %Colorante Ajustado RB × (1 ± x%)  
 
     --- FORMATO DE SALIDA ---
-    RESPUESTA TEXTUAL ÚNICA:
-    1. Explicación breve y resumida de cambios aplicados, señalar porcentajes encontrados y aplicados.
+    RESPUESTA TEXTUAL ÚNICA (NO código):
+    1. Explicación BREVE y RESUMIDA de cambios aplicados.
     2. Mencionar si se aplica ajuste por colorantes, lote, ambos o ninguno; esto en letras grandes y/o en negrita
     2. TABLA FINAL con las siguientes columnas:
     - Todas las columnas originales de tabla de colorantes más 2 columnas de matiz e intensidad que se aplicarán:
@@ -400,100 +422,6 @@ def set_manual_ol():
                 st.session_state.manual_ol_df = manual_ol_series
                 st.session_state.use_manual_ol = True
                 st.rerun()
-
-def show_frontend():
-    col1, col2 = st.columns([2, 5])  # 4/5 del ancho para el input, 1/5 para el botón
-
-    with col1:
-        user_input = st.text_input(
-            "Ingrese un código OL válido:", 
-            placeholder="Escriba aquí...",
-            key="user_input_field",
-        )
-    
-    if user_input:
-        if st.session_state.use_manual_ol:
-            ol = st.session_state.manual_ol_df
-            st.session_state.use_manual_ol = False
-        else:
-            ol = db_data2.ol_df(user_input)
-            ol = db_data2.ol_description_df(ol)
-        if ol.empty:
-            st.warning("No se encuentra esa OL en la base de datos")
-            set_manual_ol()
-            return
-        
-        st.markdown("Datos de OL:")
-        st.dataframe(ol)
-        ol = ol.loc[0]
-
-        again = True
-        bad_recipes = []
-        receta_colorantes_df = pd.DataFrame() 
-        comparacion_colorantes_df = pd.DataFrame()
-        comparacion_lote_est_df = pd.DataFrame()
-
-        while again:
-            receta_base_df = get_recipes_by_color(ol["CODIGO_COLOR"], ol["RECETA"])
-            
-            for recipe in bad_recipes:
-                receta_base_df = receta_base_df[receta_base_df["TCODIRECE"] != recipe]
-            st.dataframe(receta_base_df)
-
-            if receta_base_df.empty:
-                return
-            
-            if receta_base_df["TCODIRECE"].isin([ol["RECETA"]]).any():
-                receta_base_df = receta_base_df[receta_base_df["TCODIRECE"] != ol["RECETA"]]
-            
-            if receta_base_df.empty:
-                st.warning("La única receta encontrada es a si misma, no hay más recetas por analizar")
-                return
-            
-
-            #st.markdown(receta_base_df.to_markdown(index=True))
-            flag_filter = False
-            if len(receta_base_df) != 1:
-                receta_base_df, flag_filter = filter_by_ep(receta_base_df, ol["EP"])
-            if len(receta_base_df) != 1:
-                receta_base_df = filter_by_repro(receta_base_df)
-            if flag_filter:
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_lote(receta_base_df, ol["LOTE_STD"], True) 
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_rb(receta_base_df, ol['RB']) 
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_stage(receta_base_df)
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_date(receta_base_df)
-            else:
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_stage_labdip(receta_base_df)
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_lote(receta_base_df, ol["LOTE_STD"], True) 
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_rb(receta_base_df, ol['RB'])      
-                if len(receta_base_df) != 1:
-                    receta_base_df = filter_by_date(receta_base_df)
-        
-            # Aqui acaba la busqueda de la receta correcta, ahora se buscará ajustar el colorante:
-            st.markdown("----")
-            receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df = get_finals_dfs(receta_base_df['TCODIRECE'].iloc[0], ol['LOTE_STD'])
-            if receta_colorantes_df.empty:
-                bad_recipes.append(receta_base_df['TCODIRECE'].iloc[0])
-                st.warning("No hay datos de colorantes para esta receta.")
-                again = False
-                return 
-            else: 
-                again = False
-        receta_colorantes_df['COLORANTE_AJUSTADO'] = round(receta_colorantes_df['TCONCPROD'] * (1 + (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100), 4)
-        st.markdown("Colorante ajustado por Relación de Baño")
-        st.markdown(receta_colorantes_df.to_markdown())
-
-        with st.spinner("IA analizando, un momento por favor..."):
-            chat_response = decide_by_observation_gemini_four(receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
-
-            st.markdown(chat_response)
 
 def verify_user(user: str, pwd: str):
     try:
@@ -590,6 +518,190 @@ def create_ols(uploaded_file):
         except Exception as e:
             st.error(f"Error al cargar el archivo: {str(e)}")
 
+def write_ol_mariadb(ol):
+    try:
+        conn = pymysql.connect(**db_config)
+
+        # Primero se verifica que la OL no exista, esto evita que se suba la misma OL en cada momento
+        check_query = "SELECT * FROM prdoolsstemp WHERE TCODIOL = %s"
+        check_df = pd.read_sql(check_query, conn, params=(ol,))
+        if check_df.empty:
+            cursor = conn.cursor()
+
+            query = """
+            INSERT INTO prdoolsstemp (TCODIOL) 
+            VALUES (%s)
+            """
+            cursor.execute(query, (ol))
+            conn.commit()
+
+            cursor.close()
+            print("ol", ol, " Subido exitosamente")
+        else:
+            print("ol", ol, " ignorada")
+        conn.close()
+
+    except Exception as e:
+        print(e)
+
+def get_ols_from_mariadb():
+    try:
+        conn = pymysql.connect(**db_config)
+        query = "SELECT * FROM prdoolsstemp"
+        df = pd.read_sql(query, conn)
+        conn.close()
+        ols = df["TCODIOL"].to_numpy()
+        return ols
+    except Exception as e:
+        print(e)
+
+
+def show_frontend():
+    col1, col2 = st.columns([2, 5])  # 4/5 del ancho para el input, 1/5 para el botón
+
+    user_input = None
+    if st.session_state.ol_selected:
+        user_input = st.session_state.ol_selected
+        print("seteamos user input:", user_input)
+        st.session_state.ol_selected = None
+
+    print("user_input:", user_input)
+    if not user_input:
+        with col1:
+            user_input = st.text_input(
+                "Ingrese un código OL válido:", 
+                placeholder="Escriba aquí...",
+                key="user_input_field",
+            )
+    
+    print("user_input 2:", user_input)
+    if user_input:
+        if st.session_state.use_manual_ol:
+            ol = st.session_state.manual_ol_df
+            st.session_state.use_manual_ol = False
+        else:
+            ol = db_data2.ol_df(user_input)
+            ol = db_data2.ol_description_df(ol)
+        if ol.empty:
+            st.warning("No se encuentra esa OL en la base de datos")
+            set_manual_ol()
+            return
+        
+        st.markdown("Datos de OL:")
+        st.dataframe(ol)
+        ol = ol.loc[0]
+
+        again = True
+        bad_recipes = []
+        receta_colorantes_df = pd.DataFrame() 
+        comparacion_colorantes_df = pd.DataFrame()
+        comparacion_lote_est_df = pd.DataFrame()
+
+        while again:
+            receta_base_df = get_recipes_by_color(ol["CODIGO_COLOR"], ol["RECETA"])
+            
+            for recipe in bad_recipes:
+                receta_base_df = receta_base_df[receta_base_df["TCODIRECE"] != recipe]
+            st.dataframe(receta_base_df)
+
+            if receta_base_df.empty:
+                return
+            
+            if receta_base_df["TCODIRECE"].isin([ol["RECETA"]]).any():
+                receta_base_df = receta_base_df[receta_base_df["TCODIRECE"] != ol["RECETA"]]
+            
+            if receta_base_df.empty:
+                st.warning("La única receta encontrada es a si misma, no hay más recetas por analizar")
+                return
+            
+
+            #st.markdown(receta_base_df.to_markdown(index=True))
+            flag_filter = False
+            if len(receta_base_df) != 1:
+                receta_base_df = filter_by_repro(receta_base_df)
+            if len(receta_base_df) != 1:
+                receta_base_df, flag_filter = filter_by_ep(receta_base_df, ol["EP"])
+            if flag_filter:
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_lote(receta_base_df, ol["LOTE_STD"], True) 
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_rb(receta_base_df, ol['RB']) 
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_stage(receta_base_df)
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_date(receta_base_df)
+            else:
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_stage_labdip(receta_base_df)
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_lote(receta_base_df, ol["LOTE_STD"], True) 
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_rb(receta_base_df, ol['RB'])      
+                if len(receta_base_df) != 1:
+                    receta_base_df = filter_by_date(receta_base_df)
+        
+            # Aqui acaba la busqueda de la receta correcta, ahora se buscará ajustar el colorante:
+            st.markdown("----")
+            receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df = get_finals_dfs(receta_base_df['TCODIRECE'].iloc[0], ol['LOTE_STD'])
+            if receta_colorantes_df.empty:
+                bad_recipes.append(receta_base_df['TCODIRECE'].iloc[0])
+                st.warning("No hay datos de colorantes para esta receta.")
+                again = False
+                return 
+            else: 
+                again = False
+        receta_colorantes_df['AJUTE_RB'] = (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100
+        receta_colorantes_df['CONC_RB'] = round(receta_colorantes_df['TCONCPROD'] * (1 + (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100), 4)
+        #st.markdown("Colorante ajustado por Relación de Baño")
+        #st.markdown(receta_colorantes_df.to_markdown())
+
+        #with st.spinner("IA analizando, un momento por favor..."):
+        #    chat_response = decide_by_observation_gemini_four(receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
+
+        #    st.markdown(chat_response)
+        #    st.markdown("Receta Base Encontrada:")
+        #    st.dataframe(receta_base_df)
+
+def show_sidebar():
+    with st.sidebar:
+        st.header("Creación y Carga de OLs")
+
+        ol_options = get_ols_from_mariadb()
+        selection = st.selectbox(
+            "Seleccione una OL:",
+            options=ol_options,
+            index=None,
+            key="sidebar_selectbox"
+        )
+
+        if selection:
+            st.session_state.ol_selected = selection
+
+        st.markdown("-----")
+
+        uploaded_file = st.file_uploader(
+            "Sube tu archivo CSV o Excel",
+            type=['csv', 'xlsx', 'xls'],
+            accept_multiple_files=False,
+            key="file_uploader"
+        )
+
+        if uploaded_file:
+            with st.spinner("Creando OLs"):
+                create_ols(uploaded_file)
+                st.session_state.button_ols_disable = False
+            
+        if st.button("Obtener Ols creadas", disabled=st.session_state.button_ols_disable):
+            st.session_state.show_ols_df = True
+
+        set_ols = st.text_input("Cargar OLs")
+        if set_ols:    
+            ols = set_ols.split(' ')
+            for ol in ols:
+                write_ol_mariadb(ol)
+            st.success("OLs cargados, recargar pagina para visualizar en desplegable")
+
+
 # ------------------------------- Estados iniciales ---------------------------------
 
 if "button_ols_disable" not in st.session_state:
@@ -602,41 +714,20 @@ if "ols_df" not in st.session_state:
 if "show_ols_df" not in st.session_state:
     st.session_state.show_ols_df = False
 
+if "ol_selected" not in st.session_state:
+    st.session_state.ol_selected = None
+
+
 # ------------------------------------------------------------------------------------
 
 st.set_page_config(page_title="1er Matizado", page_icon="📊", layout="wide")
 st.set_option('deprecation.showPyplotGlobalUse', False)
 st.title("Análisis de Matizado - Primera Entrada")
 
+show_sidebar()
+
 show_frontend()
 if st.session_state.show_ols_df:
     st.dataframe(st.session_state.ols_df)
     st.session_state.show_ols_df = False
 
-with st.sidebar:
-    st.header("Creación de OLs")
-    uploaded_file = st.file_uploader(
-        "Sube tu archivo CSV o Excel",
-        type=['csv', 'xlsx', 'xls'],
-        accept_multiple_files=False,
-        key="file_uploader"
-    )
-
-    if uploaded_file:
-        with st.spinner("Creando OLs"):
-            create_ols(uploaded_file)
-            st.session_state.button_ols_disable = False
-        #st.rerun()
-        #print(create_ol_proc("594237", "01400", "0266",  "942262", "1012", "18191", "7"))4        #print(create_ol_proc(594237, "01401", "0266", 942262, 1012, "18191", 7))
-
-    if st.button("Obtener Ols creadas", disabled=st.session_state.button_ols_disable):
-        st.session_state.show_ols_df = True
-        st.rerun()
-
-    opciones = ["Opción 1", "Opción 2", "Opción 3"]
-    seleccion = st.selectbox(
-        "Selecciona una opción:",
-        options=opciones,
-        index=0,  # Opción por defecto (la primera)
-        key="sidebar_selectbox"
-    )

@@ -31,6 +31,7 @@ def ol_df(ol):
                 to_char(c.especificacao_produt) as ep,
                 qnfcn_conv_char_a_number(c.lote_produto) as lote_std,
                 c.rb_padrao / 100 as rb,
+                e.tcodiclie,
                 e.tabrvclie
             from ordem_laboratorio   c,
                 ligacao_colormaster b,
@@ -91,7 +92,7 @@ def ol_description_df(ol_df):
         return ol_df
     ol_df["DESCRIPCION_COLOR"] = ol_df["CODIGO_COLOR"].apply(get_description_color)
     ol_df["DESCRIPCION_TELA"] = ol_df["EP"].apply(get_description_ep)
-    ol_df = ol_df[["OL","RECETA", "TABRVCLIE", "CODIGO_COLOR", "DESCRIPCION_COLOR", "EP", "DESCRIPCION_TELA", "LOTE_STD", "RB"]]
+    ol_df = ol_df[["OL","RECETA", "TCODICLIE", "TABRVCLIE", "CODIGO_COLOR", "DESCRIPCION_COLOR", "EP", "DESCRIPCION_TELA", "LOTE_STD", "RB"]]
     return ol_df
 
 def get_recipe_from_carton_laboratorio(color_ol):
@@ -191,7 +192,7 @@ def get_recipes_complete(cod_color):
             conn.close()
             if df.empty:
                 return pd.DataFrame()
-            df = df[["TCODIRECE", "TCODICOLO", "TDESCCOLO", "TCODIARTI", "TDESCTELA", "TCODILOTE", "TRELABANO", "TESTARECE", "TTIPORECE", "TRECE_SEQ", "TFECHACTU", "TDESCTIPOTEJI"]]
+            df = df[["TCODIRECE", "TCODICOLO", "TDESCCOLO", "TCODIARTI", "TDESCTELA", "TCODILOTE", "TRELABANO", "TESTARECE", "TTIPORECE", "TAUXIRECE", "TRECE_SEQ", "TFECHACTU", "TDESCTIPOTEJI"]]
             return df
         except Exception as e:
             #print(e)

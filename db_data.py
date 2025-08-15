@@ -40,27 +40,36 @@ def ol_df(ol):
         try:
             query = f"""
             select c.numero_ordem as ol,
-                rtrim(b.codigocolormaster) as RECETA,
-                trim(c.codigo_cor) as CODIGO_COLOR,
-                to_char(c.especificacao_produt) as EP,
-                qnfcn_conv_char_a_number(c.lote_produto) as LOTE_STD,
-                c.rb_padrao / 100 as rb
+                rtrim(b.codigocolormaster) as receta,
+                trim(c.codigo_cor) as codigo_color,
+                to_char(c.especificacao_produt) as ep,
+                qnfcn_conv_char_a_number(c.lote_produto) as lote_std,
+                c.rb_padrao / 100 as rb,
+                e.tabrvclie,
+                e.tcodiclie
             from ordem_laboratorio   c,
-                ligacao_colormaster b
+                ligacao_colormaster b,
+                tidocolo            d,
+                qndoclie            e
             where b.id_ligacaocolormaste = to_number(c.ordem_cliente)
             and c.numero_ordem = {ol}
+            and trim(c.codigo_cor) = d.tcodicolo(+)
+            and d.tcodiclie = e.tcodiclie(+)
             order by c.numero_ordem desc
             """
-            print(query)
             df = pd.read_sql(query, conn)
             conn.close()
             if not df.empty:
+                df["LOTE_STD"] = df["LOTE_STD"].astype(str)
                 return df
             else:
                 return pd.DataFrame()
         except Exception as e:
             return pd.DataFrame()
     return pd.DataFrame()
+
+print("datos de OL:")
+print(ol_df("158692"))
 
 def get_recipe_from_carton_laboratorio(num_ep, color_ol):
     conn = connection()
@@ -147,9 +156,9 @@ def temp_df():
             return pd.DataFrame()
     return pd.DataFrame()
 
-temp = temp_df()
-print("datos del nuevo query:")
-print(temp)
+#temp = temp_df()
+#print("datos del nuevo query:")
+#print(temp)
 
 def recipe_data_df(recipe):
     conn = connection()
@@ -293,7 +302,36 @@ def get_colors_from_cod_agr(codi_agru):
             return pd.DataFrame()
     return None
 
-print(get_colors_from_cod_agr(1007777))
+# Tabla de seguimiento de ordenes de laboratorio + descripcion de articulos
+def seg_ord_plus_descr_ep():
+    conn = connection()
+    if conn:
+        try:
+            query = """
+            SELECT
+                l.*,
+                t.tdesctela AS DESCRIPCION_ARTICULO
+            FROM
+                LBVODETAPEDILABO l
+            LEFT JOIN
+                TEDOTELA t ON l.TCODIARTI = t.tcoditela
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+            if not df.empty:
+                return df
+            else:
+                return ""
+        except Exception as e:
+            return ""
+    return ""
+
+#print("probando query!")
+#df = seg_ord_plus_descr_ep()
+#print(df.columns)
+#print(len(df))
+
+#print(get_colors_from_cod_agr(1007777))
 
 #print("esta esss")
 #use_color= get_colors_from_cod_agr("127763")

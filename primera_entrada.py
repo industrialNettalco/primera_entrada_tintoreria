@@ -8,6 +8,10 @@ from google import genai
 import google.generativeai as genai
 from dotenv import load_dotenv
 import streamlit as st
+import cx_Oracle
+import pymysql
+
+# --------------------- CONFIGURACIONES ------------------------
 
 # Cargar las variables de entorno desde el archivo .env
 warnings.filterwarnings("ignore")
@@ -18,6 +22,33 @@ genai.configure(api_key=api_key)
 DEEPSEEK_MODEL_V3 = "deepseek-chat"
 GEMINI_MODEL_2_0_FLASH =  "gemini-2.0-flash"
 GEMINI_MODEL_2_5_FLASH = "gemini-2.5-flash"
+
+DB_USER = os.getenv("DB_NET_USER")
+DB_PASSWORD = os.getenv("DB_NET_PASSWORD")
+DB_HOST = os.getenv("DB_NET_HOST")
+DB_PORT = os.getenv("DB_NET_PORT")
+DB_NAME = os.getenv("DB_NET_NAME")
+
+DB_PRENDAS_USER = os.getenv("DB_PRENDAS_USER")
+DB_PRENDAS_PASSWORD = os.getenv("DB_PRENDAS_PASSWORD")
+DB_PRENDAS_HOST = os.getenv("DB_PRENDAS_HOST")
+DB_PRENDAS_PORT = os.getenv("DB_PRENDAS_PORT")
+DB_PRENDAS_NAME = os.getenv("DB_PRENDAS_NAME")
+
+dsn = cx_Oracle.makedsn(DB_HOST, DB_PORT, sid=DB_NAME)
+connection = cx_Oracle.connect(user=DB_USER, password=DB_PASSWORD, dsn=dsn)
+
+db_config = {
+    'host': DB_PRENDAS_HOST,
+    'port': int(DB_PRENDAS_PORT),
+    'user': DB_PRENDAS_USER,
+    'password': DB_PRENDAS_PASSWORD,
+    'database': DB_PRENDAS_NAME,
+    'charset': 'utf8mb4',
+    'collation': 'utf8mb4_general_ci'
+}
+
+# -------------------------------------------------------------------
 
 def get_recipes_by_colors(colors):
     recipes_df = pd.DataFrame()
@@ -277,249 +308,9 @@ def get_finals_dfs(recipe, ol_lote_std):
 
     return receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df
 
-def decide_by_observation_gemini(receta_df, comparacion_df, comparacion_lote_df, lote_receta):
-    model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
-
-    receta_df = receta_df[['TCODIPROD','TCODIAGRP', 'TDESCPROD', 'COLORANTE_AJUSTADO']]
-    tabla_receta_colorantes = receta_df.to_markdown(index=False)
-    tabla_comparacion_colorantes = comparacion_df.to_markdown(index=False)
-    tabla_comparacion_lote = comparacion_lote_df.to_markdown(index=False)
-
-    context = f"""
-    OBJETIVO: Ajustar automáticamente los valores de 'COLORANTE_AJUSTADO' en 'receta_colorantes_df' basado en observaciones de 2 tablas de referencia y devolver SOLO la tabla final con los resultados.
-
-    --- TABLAS DE ENTRADA ---
-    1. RECETA COLORANTES BASE: Contiene los colorantes a ajustar (COLORANTE_AJUSTADO) y sus descripciones (TDESCPROD).
-    {tabla_receta_colorantes}
-
-    2. COMPARACION COLORANTES EST: Proporciona observaciones en columna 'TOBS' para ajustes.
-    {tabla_comparacion_colorantes}
-
-    3. COMPARACION LOTE STD: Proporciona ajustes estructurados en 3 columnas:
-    - TINDIMATZ: Matiz a modificar (AM/AZ/RO/=).
-    - TPORCMATZ: % de ajuste para el matiz.
-    - TPORCINTE: % de ajuste para intensidad (afecta a TODOS los colorantes).
-    {tabla_comparacion_lote}
-
-    --- REGLAS DE AJUSTE ---
-    A) INTENSIDAD (aplica a TODOS los colorantes):
-    - Si TOBS contiene "% más/menos intenso" o sinónimos: aplicar inverso (ej: "+2%" -> -0.02).
-    - Si TPORCINTE ≠ 0: usar ese % directamente.
-
-    B) MATIZ (aplica SOLO al color mencionado):
-    - Si TOBS contiene "% más/menos [color]": buscar en TDESCPROD y aplicar inverso.
-    - Si TINDIMATZ ≠ "=": aplicar TPORCMATZ al matiz especificado.
-
-    C) PRIORIDADES:
-    1. Aplicar primero intensidad, luego matiz.
-    2. Ignorar observaciones ambiguas o casos "Ok".
-    3. sumar o restar cantidades no multiplicar, (ej: encontramos +3% intens. -> TCONCPROD - 0.03)
-
-    d) MISMO LOTE:
-    - En caso encuentres que tanto el IDLOTE_PADRAO y TLOTECOMP son el mismo aplicar ajuste, en caso sean distintos no aplicar
-
-    --- FORMATO DE SALIDA ---
-    RESPUESTA TEXTUAL ÚNICA:
-    1. Explicación breve de cambios aplicados, señalar porcentajes encontrados y aplicados.
-    2. TABLA FINAL con las siguientes columnas:
-    - Todas las columnas originales de receta_colorantes_df.
-    - 4 columnas añadidas:
-        * INT_TOBS
-        * MATIZ_TOBS
-        * INT_LOTE
-        * MATIZ_LOTE
-    - COLUMNA FINAL: 'COL_FINAL' (resultado calculado).
-    
-    REQUISITOS:
-    - NO incluir código.
-    - Formatear la tabla para claridad (ancho de columnas ajustado).
-    """
-
-    print("contexto para la ia:")
-    print(context)
-    response = model.generate_content(context)
-    respuesta_texto = response.text
-    return respuesta_texto
-
-def decide_by_observation_gemini_two(receta_df, comparacion_df, comparacion_lote_df, lote_receta):
-    model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
-
-    receta_df = receta_df[['TCODIPROD','TCODIAGRP', 'TDESCPROD', 'COLORANTE_AJUSTADO']]
-    tabla_receta_colorantes = receta_df.to_markdown(index=False)
-    tabla_comparacion_colorantes = comparacion_df.to_markdown(index=False)
-    tabla_comparacion_lote = comparacion_lote_df.to_markdown(index=False)
-
-    print("tipo de lote comparado: ", type(comparacion_lote_df))
-    contexto_lote = ""
-    regla_lote = ""
-    if comparacion_lote_df['TLOTECOMP'].iloc[0] is not None and comparacion_lote_df['TLOTECOMP'].iloc[0] == lote_receta:
-        contexto_lote = F"""
-        3. COMPARACION LOTE STD: Proporciona ajustes estructurados en 3 columnas:
-        - TINDIMATZ: Matiz a modificar (AM/AZ/RO/=).
-        - TPORCMATZ: % de ajuste para el matiz.
-        - TPORCINTE: % de ajuste para intensidad (afecta a TODOS los colorantes).
-        {tabla_comparacion_lote}
-        """
-
-        regla_lote = """
-        d) AJUSTE LOTE:
-        Aplicar el ajuste por Lote, de acuerdo a los valores de la tabla de COMPARACION LOTE STD
-        """
-        print("ambas recetas son iguales")
-    else:
-        regla_lote = "Sin ajuste por LOTE - INT_LOTE = 0, MATIZ_LOTE = 0. Mencionar que no hay ajuste por LOTE porque el Lote de la receta base es distinto al Lote comparado"
-
-    context = f"""
-    OBJETIVO: Ajustar automáticamente los valores de 'COLORANTE_AJUSTADO' en 'receta_colorantes_df' basado en observaciones de 2 tablas de referencia y devolver SOLO la tabla final con los resultados.
-
-    --- TABLAS DE ENTRADA ---
-    1. RECETA COLORANTES BASE: Contiene los colorantes a ajustar (COLORANTE_AJUSTADO) y sus descripciones (TDESCPROD).
-    {tabla_receta_colorantes}
-
-    2. COMPARACION COLORANTES EST: Proporciona observaciones en columna 'TOBS' para ajustes.
-    {tabla_comparacion_colorantes}
-
-    {contexto_lote}
-
-    --- REGLAS DE AJUSTE ---
-    A) INTENSIDAD (aplica a TODOS los colorantes):
-    - Si TOBS contiene "% más/menos intenso" o sinónimos: aplicar inverso (ej: "+2%" -> -0.02).
-    - Si TPORCINTE ≠ 0: usar ese % directamente.
-
-    B) MATIZ (aplica SOLO al color mencionado):
-    - Si TOBS contiene "% más/menos [color]": buscar en TDESCPROD y aplicar inverso.
-    - Si TINDIMATZ ≠ "=": aplicar TPORCMATZ al matiz especificado.
-
-    C) PRIORIDADES:
-    1. Aplicar primero intensidad, luego matiz.
-    2. Ignorar observaciones ambiguas o casos "Ok".
-    3. sumar o restar cantidades no multiplicar, (ej: encontramos +3% intens. -> TCONCPROD - 0.03)
-
-    {regla_lote}
-
-    --- FORMATO DE SALIDA ---
-    RESPUESTA TEXTUAL ÚNICA:
-    1. Explicación breve de cambios aplicados, señalar porcentajes encontrados y aplicados.
-    2. TABLA FINAL con las siguientes columnas:
-    - Todas las columnas originales de receta_colorantes_df.
-    - 4 columnas añadidas:
-        * INT_TOBS
-        * MATIZ_TOBS
-        * INT_LOTE
-        * MATIZ_LOTE
-    - COLUMNA FINAL: 'COL_FINAL' (resultado calculado).
-    
-    REQUISITOS:
-    - NO incluir código.
-    - Formatear la tabla para claridad (ancho de columnas ajustado).
-    """
-
-    print("contexto para la ia:")
-    print(context)
-    response = model.generate_content(context)
-    respuesta_texto = response.text
-    return respuesta_texto
-
-def decide_by_observation_gemini_three(colorantes_df, comparacion_lote_df, lote_receta):
-    model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
-    list_observations = colorantes_df[colorantes_df["FLAG_OBS"] == True]["TOBS"].tolist()
-    color_observations = ", ".join(list_observations)
-    #receta_df = receta_df[['TCODIPROD','TCODIAGRP', 'TDESCPROD', 'COLORANTE_AJUSTADO']]
-    #tabla_receta_colorantes = receta_df.to_markdown(index=False)
-    #tabla_comparacion_colorantes = comparacion_df.to_markdown(index=False)
-    tabla_comparacion_lote = comparacion_lote_df.to_markdown(index=False)
-    tabla_colorantes = colorantes_df.to_markdown(index=False)
-
-
-    contexto_lote = ""
-    regla_lote = ""
-    lote_intensidad = ""
-    lote_matiz = ""
-    
-    if comparacion_lote_df['TLOTECOMP'].iloc[0] is not None and comparacion_lote_df['TLOTECOMP'].iloc[0] != lote_receta:
-        if comparacion_lote_df['TPORCINTE'].iloc[0] != 0:
-            valor = comparacion_lote_df['TPORCINTE'].iloc[0]
-            valor = valor * -1
-            lote_intensidad = "aplicar " + str(valor) + "% de intensidad"
-        
-        if comparacion_lote_df['TINDIMATZ'].iloc[0].strip() != '=':
-            color_matiz = comparacion_lote_df['TINDIMATZ'].iloc[0].strip()
-            valor_matiz = comparacion_lote_df['TPORCMATZ'].iloc[0]
-            valor_matiz = valor_matiz * -1
-            lote_matiz = "aplicar " + str(valor_matiz) + "% al color " + color_matiz
-        contexto_lote = F"""
-        2. COMPARACION LOTE STD: Proporciona ajustes estructurados en 3 columnas:
-        - TINDIMATZ: Matiz a modificar (AM/AZ/RO/=).
-        - TPORCMATZ: % de ajuste para el matiz.
-        - TPORCINTE: % de ajuste para intensidad (afecta a TODOS los colorantes).
-        {tabla_comparacion_lote}
-        """
-
-        regla_lote = """
-        d) AJUSTE LOTE:
-        Aplicar el ajuste por Lote, de acuerdo a los valores de la tabla de COMPARACION LOTE STD
-        """
-    else:
-        regla_lote = "Sin ajuste por LOTE - INT_LOTE = 0, MATIZ_LOTE = 0. Mencionar que no hay ajuste por LOTE porque el Lote de la receta base es distinto al Lote comparado"
-
-
-    context = f"""
-    OBJETIVO: Ajustar automáticamente los valores de 'COLORANTE_AJUSTADO' basado en observaciones de tablas de referencia y devolver SOLO la tabla final con los resultados.
-
-    --- TABLAS DE ENTRADA ---
-    1. TABLA DE COLORANTES: Contiene los colorantes ajustados, sus observaciones(TOBS) y flag de observacion. Tomar en cuenta que las observaciones solo se toma en cuenta
-    si y solo si flag de observacion es True en caso sea False no tomar en cuenta las observaciones para el ajuste
-    {tabla_colorantes}
-
-    {contexto_lote}
-
-    --- REGLAS DE AJUSTE ---
-    A) INTENSIDAD (aplica a TODOS los colorantes):
-    - Si TOBS contiene "x% más/menos intenso" o sinónimos: aplicar inverso (ej: "x% más intenso" → disminuir x%.).
-    - Si TPORCINTE contiene "-3" o "2" aplicar el inverso (ej: "-3" -> aumentar 3%)
-
-    B) MATIZ (solo para el color mencionado):
-    - Si TOBS indica "% más/menos [color]":  
-    1. **Buscar en TODAS las filas de TDESCPROD** (no solo en la fila de la observación) coincidencias EXACTAS con el color mencionado (ej: "azul" ≠ "azul marino").  
-    2. **Aplicar el ajuste inverso a TODOS los colorantes que coincidan** con el nombre exacto del color.  
-    - Si TINDIMATZ ≠ "=": invertir TPORCMATZ para el matiz indicado (usando misma búsqueda global en TDESCPROD). 
-
-    **EJEMPLO CLAVE**:  
-    - Si TOBS en fila 2 dice "5% +azul":  
-    a) Escanear TODOS los TDESCPROD de la tabla.  
-    b) Aplicar -5% **solo** a filas donde TDESCPROD sea exactamente "azul".  
-    c) **NO Aplicar** si el color no es exactamente "azul" ej: ("azul turquesa", "azul marino") 
-
-    C) PRIORIDADES:
-    1. Aplicar primero intensidad, luego matiz.
-    2. Ignorar observaciones ambiguas o casos "Ok".
-
-    {regla_lote}
-
-    **IMPORTANTE** Aplicar: %Colorante Estimado = %Colorante Ajustado RB × (1 ± x%)  
-
-    --- FORMATO DE SALIDA ---
-    RESPUESTA TEXTUAL ÚNICA:
-    1. Explicación breve y resumida de cambios aplicados, señalar porcentajes encontrados y aplicados.
-    2. TABLA FINAL con las siguientes columnas:
-    - Todas las columnas originales de colorante ajustado menos:
-        * TCONCPROD
-        * FLAG_OBS
-        * TOBS
-    - porcentajes de intensidad y matiz aplicados
-    - COLUMNA FINAL: 'COL_FINAL' (resultado calculado).
-        * Los valores deben redondearse a 4 decimales en todos los casos
-    """
-
-    print("contexto para la ia:")
-    print(context)
-    response = model.generate_content(context)
-    respuesta_texto = response.text
-    return respuesta_texto
-
 def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_receta):
     model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
-    tabla_colorantes = colorantes_df[["TCODIPROD", "TDESCPROD", "TCONCPROD", "COLORANTE_AJUSTADO"]]
+    tabla_colorantes = colorantes_df[["TCODIPROD", "TDESCPROD", "TCONCPROD", "AJUTE_RB", "CONC_RB"]]
     tabla_colorantes = tabla_colorantes.to_markdown(index=False)
     list_observations = colorantes_df[colorantes_df["FLAG_OBS"] == True]["TOBS"].tolist()
     
@@ -543,7 +334,7 @@ def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_r
             lote_matiz = "aplicar " + str(valor_matiz) + "% al color " + color_matiz
 
     context = f"""
-    OBJETIVO: Ajustar automáticamente los valores de 'COLORANTE_AJUSTADO' basado en observaciones de tablas de referencia y devolver la tabla final con los resultados.
+    OBJETIVO: Ajustar automáticamente los valores de 'CONC_RB' basado en observaciones de tablas de referencia y devolver la tabla final con los resultados.
 
     --- TABLAS DE ENTRADA ---
     1. TABLA DE COLORANTES: Contiene los colorantes ajustados, a esta tabla se le aplicaran los ajuste
@@ -567,15 +358,15 @@ def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_r
     **IMPORTANTE** Aplicar: %Colorante Estimado = %Colorante Ajustado RB × (1 ± x%)  
 
     --- FORMATO DE SALIDA ---
-    RESPUESTA TEXTUAL ÚNICA:
-    1. Explicación breve y resumida de cambios aplicados, señalar porcentajes encontrados y aplicados.
+    RESPUESTA TEXTUAL ÚNICA (NO código):
+    1. Explicación BREVE y RESUMIDA de cambios aplicados.
     2. Mencionar si se aplica ajuste por colorantes, lote, ambos o ninguno; esto en letras grandes y/o en negrita
     2. TABLA FINAL con las siguientes columnas:
     - Todas las columnas originales de tabla de colorantes más 2 columnas de matiz e intensidad que se aplicarán:
         * AJUSTE_INTENSIDAD
         * AJUSTE_MATIZ
     - COLUMNA FINAL: 'COL_FINAL' (resultado calculado).
-        * Los valores deben redondearse a 4 decimales en todos los casos
+        **IMPORTANTE** Los valores deben redondearse a 4 decimales en todos los casos, en caso tenga menos decimales llenar con ceros.
 
     ---------------------------------
     *TABLA DE COLORANTES*
@@ -631,16 +422,161 @@ def set_manual_ol():
                 st.session_state.use_manual_ol = True
                 st.rerun()
 
+def verify_user(user: str, pwd: str):
+    try:
+        cursor = connection.cursor()
+        username = cursor.var(cx_Oracle.STRING)
+        p_menserro = cursor.var(cx_Oracle.STRING)
+        cursor.callproc("prc_login",[user, pwd, username, p_menserro])
+        if p_menserro.getvalue():
+            return p_menserro.getvalue()
+        else:
+            return username.getvalue(), "Verificacion Correcta"
+
+    except Exception as e:
+        print(e)
+    finally:
+        cursor.close()
+
+def create_ol_proc(red_crudo, color, cliente, ep, pi, lote, rb):
+    try:
+        cursor = connection.cursor()
+        ol = cursor.var(cx_Oracle.STRING)
+        receta = cursor.var(cx_Oracle.STRING)
+        p_mensavis = cursor.var(cx_Oracle.STRING)
+        p_menserro = cursor.var(cx_Oracle.STRING)
+        cursor.callproc("lbpkg_gestion_ols.prc_crea_ol_manual",[color, ep, red_crudo, lote, rb, cliente, pi, ol, receta, p_mensavis, p_menserro])
+        print(p_mensavis.getvalue())
+        print(p_menserro.getvalue())
+        #print(ol.getvalue())
+        #print(receta.getvalue())
+        if p_menserro.getvalue():
+            ol = p_menserro.getvalue().split("OL")[1].split(' ')[1]
+            receta = p_menserro.getvalue().split("Receta")[1].split(' ')[1]
+            return ol, receta
+        else:
+            return ol.getvalue(), receta.getvalue()
+
+    except Exception as e:
+        print(e)
+    finally:
+        cursor.close()
+
+def es_valor_valido(valor):
+    """
+    Verifica si un valor es válido (no NaN, None, Null o 0)
+    """
+    # Verificar si es cero (incluyendo 0.0)
+    if valor == 0:
+        return False
+    
+    # Verificar NaN (funciona para float y numpy.nan)
+    if pd.isna(valor):
+        return False
+    
+    # Verificar None o Null
+    if valor is None:
+        return False
+    
+    if str(valor).strip() == "":
+        return False
+    
+    # Si pasó todas las verificaciones, es válido
+    return True
+
+def asignar_valores(row):
+    if 'OL' in row and 'RECETA' in row:
+        return row['OL'], row['RECETA']
+    elif es_valor_valido(row["TREDUCRUD"]) and es_valor_valido(row["Color"]) and es_valor_valido(row["TCODICLIE"]) and es_valor_valido(row["EP"]) and es_valor_valido(row["PI"]) and es_valor_valido(row["Lote"]) and es_valor_valido(row["RB"]):
+        print("validooooo con el color:", row["Color"])
+        return create_ol_proc(row["TREDUCRUD"], row["Color"], row["TCODICLIE"], row["EP"], row["PI"], row["Lote"], row["RB"])
+        #return "111", "SL00222"
+    else:
+        print("noooooo val:", row["Color"])
+        return " ", " "
+
+def create_ols(uploaded_file):
+    if uploaded_file is not None:
+        # Determinar el tipo de archivo y cargarlo adecuadamente
+        try:
+            if uploaded_file.type == "text/csv":
+                # Es un archivo CSV
+                df = pd.read_csv(uploaded_file, dtype={'Color': str, 'Lote': str, 'TCODICLIE': str})
+                st.success("Archivo CSV cargado correctamente!")
+            elif uploaded_file.type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                                    "application/vnd.ms-excel"]:
+                # Es un archivo Excel (.xlsx o .xls)
+                df = pd.read_excel(uploaded_file, dtype={'Color': str, 'Lote': str, 'TCODICLIE': str})
+                st.success("Archivo Excel cargado correctamente!")
+            else:
+                st.error("Formato de archivo no soportado")
+            
+            df[['OL', 'RECETA']] = df.apply(asignar_valores, axis=1, result_type='expand')
+            st.session_state.ols_df = df
+            
+        except Exception as e:
+            st.error(f"Error al cargar el archivo: {str(e)}")
+
+def write_ol_mariadb(ol):
+    try:
+        conn = pymysql.connect(**db_config)
+
+        # Primero se verifica que la OL no exista, esto evita que se suba la misma OL en cada momento
+        check_query = "SELECT * FROM prdoolsstemp WHERE TCODIOL = %s"
+        check_df = pd.read_sql(check_query, conn, params=(ol,))
+        if check_df.empty:
+            cursor = conn.cursor()
+
+            query = """
+            INSERT INTO prdoolsstemp (TCODIOL) 
+            VALUES (%s)
+            """
+            cursor.execute(query, (ol))
+            conn.commit()
+
+            cursor.close()
+            print("ol", ol, " Subido exitosamente")
+        else:
+            print("ol", ol, " ignorada")
+        conn.close()
+
+    except Exception as e:
+        print(e)
+
+    except Exception as e:
+        print(e)
+
+def get_ols_from_mariadb():
+    try:
+        conn = pymysql.connect(**db_config)
+        query = "SELECT * FROM prdoolsstemp"
+        df = pd.read_sql(query, conn)
+        conn.close()
+        ols = df["TCODIOL"].to_numpy()
+        return ols
+    except Exception as e:
+        print(e)
+
+
 def show_frontend():
     col1, col2 = st.columns([2, 5])  # 4/5 del ancho para el input, 1/5 para el botón
 
-    with col1:
-        user_input = st.text_input(
-            "Ingrese un código OL válido:", 
-            placeholder="Escriba aquí...",
-            key="user_input_field",
-        )
+    user_input = None
+    if st.session_state.ol_selected:
+        user_input = st.session_state.ol_selected
+        print("seteamos user input:", user_input)
+        st.session_state.ol_selected = None
+
+    print("user_input:", user_input)
+    if not user_input:
+        with col1:
+            user_input = st.text_input(
+                "Ingrese un código OL válido:", 
+                placeholder="Escriba aquí...",
+                key="user_input_field",
+            )
     
+    print("user_input 2:", user_input)
     if user_input:
         if st.session_state.use_manual_ol:
             ol = st.session_state.manual_ol_df
@@ -684,9 +620,9 @@ def show_frontend():
             #st.markdown(receta_base_df.to_markdown(index=True))
             flag_filter = False
             if len(receta_base_df) != 1:
-                receta_base_df, flag_filter = filter_by_ep(receta_base_df, ol["EP"])
-            if len(receta_base_df) != 1:
                 receta_base_df = filter_by_repro(receta_base_df)
+            if len(receta_base_df) != 1:
+                receta_base_df, flag_filter = filter_by_ep(receta_base_df, ol["EP"])
             if flag_filter:
                 if len(receta_base_df) != 1:
                     receta_base_df = filter_by_lote(receta_base_df, ol["LOTE_STD"], True) 
@@ -716,35 +652,84 @@ def show_frontend():
                 return 
             else: 
                 again = False
-        receta_colorantes_df['COLORANTE_AJUSTADO'] = round(receta_colorantes_df['TCONCPROD'] * (1 + (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100), 4)
-        st.markdown("Colorante ajustado por Relación de Baño")
-        st.markdown(receta_colorantes_df.to_markdown())
+        receta_colorantes_df['AJUTE_RB'] = (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100
+        receta_colorantes_df['CONC_RB'] = round(receta_colorantes_df['TCONCPROD'] * (1 + (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100), 4)
+        #st.markdown("Colorante ajustado por Relación de Baño")
+        #st.markdown(receta_colorantes_df.to_markdown())
 
         with st.spinner("IA analizando, un momento por favor..."):
             chat_response = decide_by_observation_gemini_four(receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
 
             st.markdown(chat_response)
+            st.markdown("Receta Base Encontrada:")
+            st.dataframe(receta_base_df)
 
+def show_sidebar():
+    with st.sidebar:
+        st.header("Creación y Carga de OLs")
+
+        ol_options = get_ols_from_mariadb()
+        selection = st.selectbox(
+            "Seleccione una OL:",
+            options=ol_options,
+            index=None,
+            key="sidebar_selectbox"
+        )
+
+        if selection:
+            st.session_state.ol_selected = selection
+
+        st.markdown("-----")
+
+        uploaded_file = st.file_uploader(
+            "Sube tu archivo CSV o Excel",
+            type=['csv', 'xlsx', 'xls'],
+            accept_multiple_files=False,
+            key="file_uploader"
+        )
+
+        if uploaded_file:
+            with st.spinner("Creando OLs"):
+                create_ols(uploaded_file)
+                st.session_state.button_ols_disable = False
+            
+        if st.button("Obtener Ols creadas", disabled=st.session_state.button_ols_disable):
+            st.session_state.show_ols_df = True
+
+        set_ols = st.text_input("Cargar OLs")
+        if set_ols:    
+            ols = set_ols.split(' ')
+            for ol in ols:
+                write_ol_mariadb(ol)
+            st.success("OLs cargados, recargar pagina para visualizar en desplegable")
+
+
+# ------------------------------- Estados iniciales ---------------------------------
+
+if "button_ols_disable" not in st.session_state:
+    st.session_state.button_ols_disable = True
+
+# Sirve cuando generaremos la gráfica setearemos el valor de nuestro df calculado aquí
+if "ols_df" not in st.session_state:
+    st.session_state.ols_df = pd.DataFrame()
+
+if "show_ols_df" not in st.session_state:
+    st.session_state.show_ols_df = False
+
+if "ol_selected" not in st.session_state:
+    st.session_state.ol_selected = None
+
+
+# ------------------------------------------------------------------------------------
 
 st.set_page_config(page_title="1er Matizado", page_icon="📊", layout="wide")
 st.set_option('deprecation.showPyplotGlobalUse', False)
 st.title("Análisis de Matizado - Primera Entrada")
 
+show_sidebar()
+
 show_frontend()
+if st.session_state.show_ols_df:
+    st.dataframe(st.session_state.ols_df)
+    st.session_state.show_ols_df = False
 
-with st.sidebar:
-    st.header("Creación de OLs")
-    uploaded_file = st.file_uploader(
-        "Sube tu archivo CSV o Excel",
-        type=['csv', 'xlsx', 'xls'],
-        accept_multiple_files=False,
-        key="file_uploader"
-    )
-
-    opciones = ["Opción 1", "Opción 2", "Opción 3"]
-    seleccion = st.selectbox(
-        "Selecciona una opción:",
-        options=opciones,
-        index=0,  # Opción por defecto (la primera)
-        key="sidebar_selectbox"
-    )
