@@ -46,7 +46,8 @@ def ol_df(ol):
                 qnfcn_conv_char_a_number(c.lote_produto) as lote_std,
                 c.rb_padrao / 100 as rb,
                 e.tabrvclie,
-                e.tcodiclie
+                e.tcodiclie,
+                c.tcantinte
             from ordem_laboratorio   c,
                 ligacao_colormaster b,
                 tidocolo            d,
@@ -68,8 +69,66 @@ def ol_df(ol):
             return pd.DataFrame()
     return pd.DataFrame()
 
-print("datos de OL:")
-print(ol_df("158692"))
+def get_description_color(color_id):
+    conn = connection()
+    if conn:
+        try:
+            query = "SELECT tdesccolo FROM tidocolo WHERE tcodicolo = :1"
+            df = pd.read_sql(query, conn, params= (color_id, ))
+            conn.close()
+            if not df.empty:
+                color_description = df["TDESCCOLO"].iloc[0]
+                return color_description
+            else:
+                return ""
+        except Exception as e:
+            return ""
+    return ""
+
+def get_description_ep(ep):
+    ep = ep[:-1]
+    conn = connection()
+    if conn:
+        try:
+            query = "SELECT tdesctela FROM tedotela WHERE tcoditela = :1"
+            df = pd.read_sql(query, conn, params= (ep, ))
+            conn.close()
+            if not df.empty:
+                ep_description = df["TDESCTELA"].iloc[0]
+                return ep_description
+            else:
+                return ""
+        except Exception as e:
+            return ""
+    return ""
+
+def ol_description_df(ol_df):
+    if ol_df.empty:
+        return ol_df
+    ol_df["DESCRIPCION_COLOR"] = ol_df["CODIGO_COLOR"].apply(get_description_color)
+    ol_df["DESCRIPCION_TELA"] = ol_df["EP"].apply(get_description_ep)
+    ol_df = ol_df[["OL","RECETA", "TCODICLIE", "TABRVCLIE", "CODIGO_COLOR", "DESCRIPCION_COLOR", "EP", "DESCRIPCION_TELA", "LOTE_STD", "RB", "TCANTINTE"]]
+    return ol_df
+
+def get_data_from_specific_ols():
+    ols = [158656, 150834, 158649, 158655, 158659, 158086, 158581, 157564, 158653, 158675, 158679, 158803, 158279, 157841, 158663, 158617, 154478, 157136, 158855, 158848, 158854, 155385, 157518, 158763, 158838, 158838]
+    data_total = []
+    for ol in ols:
+        df = ol_df(ol)
+        data_total.append(df)
+    
+    df_final = pd.DataFrame()
+    if data_total:
+        df_final = pd.concat(data_total, ignore_index=True)
+
+    df_final = ol_description_df(df_final)
+
+    df_final.to_excel('ols_data.xlsx', index=False)
+    #return df_final
+
+#print("datos del query:")
+#print(get_data_from_specific_ols())
+#print(ol_df(150834))
 
 def get_recipe_from_carton_laboratorio(num_ep, color_ol):
     conn = connection()
@@ -202,6 +261,9 @@ def colorante_df(receta_base):
             return pd.DataFrame()
     return None
 
+#print("datos de colorantes:")
+#print(colorante_df("SL00155876"))
+
 def colorante_df_two(cod_col):
     conn = connection()
     if conn:
@@ -235,7 +297,7 @@ def get_observation_df(cod_agrupador):
     conn = connection()
     if conn:
         try:
-            query = "SELECT TFECHINGR, TGRUPCOLR, TCODICOLR, TDESCCOLR, TOBSVLIBE FROM lbvolibelotecolr WHERE TGRUPCOLR = :1"
+            query = "SELECT TLOTECOLR, TFECHINGR, TGRUPCOLR, TCODICOLR, TDESCCOLR, TOBSVLIBE FROM lbvolibelotecolr WHERE TGRUPCOLR = :1"
             df = pd.read_sql(query, conn, params = (cod_agrupador, ))
             conn.close()
             return df
@@ -243,6 +305,30 @@ def get_observation_df(cod_agrupador):
             #print(e)
             return pd.DataFrame()
     return None
+
+#print("libreacion de colorantes:")
+#df = get_observation_df(1007777)
+#print(df)
+
+def get_lotes_df(cod_agrupador, cod_color):
+    conn = connection()
+    if conn:
+        try:
+            query = "SELECT TLOTECOLR, TFECHINGR, TGRUPCOLR, TCODICOLR, TDESCCOLR, TOBSVLIBE FROM lbvolibelotecolr WHERE TGRUPCOLR = :1 AND TCODICOLR = :2"
+            df = pd.read_sql(query, conn, params = (cod_agrupador, cod_color, ))
+            conn.close()
+            if df.empty:
+                return ""
+            lotes = df['TLOTECOLR'].unique().tolist()
+            return lotes
+        except Exception as e:
+            #print(e)
+            return ""
+    return None
+
+#print("libreacion de colorantes:")
+#df = get_lotes_df(1007777, "8438")
+#print(df)
 
 def get_observation_df_two(cod_color):
     conn = connection()
@@ -326,6 +412,65 @@ def seg_ord_plus_descr_ep():
             return ""
     return ""
 
+def temp_fall_sgt():
+    conn = connection()
+    if conn:
+        try:
+            query = """
+            select a.*,
+                to_char(nvl(a.tfechdespprog, a.tcontdate), 'yyyy-mm') as tmesedesp,
+                b.articulo as tcodihilareal,
+                b.colrns as tnumecolohila,
+                b.tdesccoln as tdesccolohila,
+                (select decode(max(x.codigo_maquina), '0AC10', 'Terceros', '0AC01', 'Nettalco', '0AC02', 'Nettalco', '0AC11', 'Nettalco', '0AC12', 'Nettalco', '0AC09', 'Nettalco', max(x.codigo_maquina))
+                    from ob_fases x
+                    where a.tnumeroobhilo = x.numero_ob
+                    and x.codigo_fase in (410, 411)) as tmaqutenihilo,
+                c.tdescarti,
+                c.tdesccoln,
+                d.tipoarticulo as ttiporeducrud,
+                to_char(min(nvl(a.tfechdespprog, a.tcontdate)) over(partition by a.tnumeud), 'iyyy-iw') as tsemadesp,
+                case
+                    when trim(e.codigo_alternativo) like '%50' then
+                    'Si'
+                    else
+                    'No'
+                end as tprodhilo,
+                case
+                    when b.colrns like '0%' and substr(b.colrns, 2, 1) <> '9' then 'Si'
+                    else 'No'
+                    end as tcodimatc  
+            from dtdoasigtelanuev      a,
+                sgt_reducido_articulo b,
+                sgt_reducido_articulo c,
+                sgt_reducido_articulo d,
+                itens_estoque e
+            where a.treduhilocolo = b.reducido(+)
+            and a.tcodireduacab = c.reducido(+)
+            and a.tcodireducrud = d.reducido(+)
+            and a.treduhilocolo = e.codigo_reduzido (+)
+            --and (a.tsectxtin = 'XTN' and (a.tcodisectdepecoln in ('XTN', 'FAL') or a.tcodisect = 'TIN') or a.tsectxtin = 'FAL' and a.tcodisectdepecoln in ('FAL'))
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+            print("df completo fall sgt: ")
+            print(df)
+            if not df.empty:    
+                return df
+                #last_data = df.loc[df['TFECHINTE'].idxmax()]
+                #codigo_receta = last_data['TCODIRECE']
+                #return codigo_receta
+            else:
+                print("No es esa tabla")
+                return None
+        except Exception as e:
+            return None
+    return None
+
+#print("probando query!")
+#print(temp_fall_sgt())
+
+#print(temp_fall_sgt())
 #print("probando query!")
 #df = seg_ord_plus_descr_ep()
 #print(df.columns)

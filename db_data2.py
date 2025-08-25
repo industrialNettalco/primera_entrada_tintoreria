@@ -32,7 +32,8 @@ def ol_df(ol):
                 qnfcn_conv_char_a_number(c.lote_produto) as lote_std,
                 c.rb_padrao / 100 as rb,
                 e.tcodiclie,
-                e.tabrvclie
+                e.tabrvclie,
+                c.tcantinte
             from ordem_laboratorio   c,
                 ligacao_colormaster b,
                 tidocolo            d,
@@ -92,7 +93,7 @@ def ol_description_df(ol_df):
         return ol_df
     ol_df["DESCRIPCION_COLOR"] = ol_df["CODIGO_COLOR"].apply(get_description_color)
     ol_df["DESCRIPCION_TELA"] = ol_df["EP"].apply(get_description_ep)
-    ol_df = ol_df[["OL","RECETA", "TCODICLIE", "TABRVCLIE", "CODIGO_COLOR", "DESCRIPCION_COLOR", "EP", "DESCRIPCION_TELA", "LOTE_STD", "RB"]]
+    ol_df = ol_df[["OL","RECETA", "TCODICLIE", "TABRVCLIE", "CODIGO_COLOR", "DESCRIPCION_COLOR", "EP", "DESCRIPCION_TELA", "LOTE_STD", "RB", "TCANTINTE"]]
     return ol_df
 
 def get_recipe_from_carton_laboratorio(color_ol):
@@ -226,6 +227,22 @@ def get_observation_df(cod_agrupador):
     return None
 
 #print(get_observation_df("8377"))
+
+def get_lotes_df(cod_agrupador, cod_color):
+    conn = connection()
+    if conn:
+        try:
+            query = "SELECT TLOTECOLR, TFECHINGR, TGRUPCOLR, TCODICOLR, TDESCCOLR, TOBSVLIBE FROM lbvolibelotecolr WHERE TGRUPCOLR = :1 AND TCODICOLR = :2"
+            df = pd.read_sql(query, conn, params = (cod_agrupador, cod_color, ))
+            conn.close()
+            if df.empty:
+                return ""
+            lotes = df['TLOTECOLR'].unique().tolist()
+            return lotes
+        except Exception as e:
+            #print(e)
+            return ""
+    return None
 
 def codi_agru(codi_arti):
     conn = connection()

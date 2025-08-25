@@ -136,7 +136,8 @@ def filter_by_ep(data_df, ep):
 
 def filter_by_repro(data_df):
     df = data_df.copy()
-    df = df[~df['TRECE_SEQ'].str.contains('REPRO', na=False)]
+    df = df[~df['TRECE_SEQ'].str.contains('REPRO', case=False, na=False)]
+    df = df[~df['TAUXIRECE'].str.contains('REPRO', case=False, na=False)]
     df = df[df['TCODIRECE'].str.startswith('SL')]
     if df.empty:
         return data_df
@@ -289,6 +290,7 @@ def get_observation(cod_color):
 def get_finals_dfs(recipe, ol_lote_std):
     tricromia_df = db_data2.colorante_df(recipe)
     tricromia_df['TCODIAGRP'] = tricromia_df['TCODIPROD'].str[1:].apply(db_data2.codi_agru)
+    receta_colorantes_base_df = tricromia_df.copy()
     receta_colorantes_df = tricromia_df
     st.markdown("Tricromía para la receta base: RECETA COLORANTES BASE")
     st.dataframe(receta_colorantes_df)
@@ -306,7 +308,7 @@ def get_finals_dfs(recipe, ol_lote_std):
     st.markdown("COMPARACION LOTE STD")
     st.dataframe(comparacion_lote_est_df)
 
-    return receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df
+    return receta_colorantes_base_df, receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df
 
 def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_receta):
     model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
@@ -352,7 +354,7 @@ def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_r
     C) PRIORIDADES:
     1. Aplicar primero intensidad, luego matiz.
     2. Habrá ajuste por comparacion de colorantes y por comparacion de lote
-    3. En la comparación de colorantes aplicar el inverso (ej: 2% +rojo -> se debe aplicar -2% rojo)
+    3. Para todos los ajustes, tanto matiz como intensidad, aplicar el inverso (ej: 2% +rojo -> se debe aplicar -2% rojo)
     4. En el ajuste de comparacion de lote si aplicar lo que indica
 
     **IMPORTANTE** Aplicar: %Colorante Estimado = %Colorante Ajustado RB × (1 ± x%)  
@@ -386,6 +388,107 @@ def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_r
     respuesta_texto = response.text
     return respuesta_texto
 
+def decide_by_observation_gemini_five(receta_colorantes_base_df, colorantes_df, comparacion_lote_df, lote_receta):
+    model = genai.GenerativeModel(GEMINI_MODEL_2_5_FLASH)
+    tabla_colorantes = colorantes_df[["TCODIPROD", "TDESCPROD", "TCONCPROD", "AJUTE_RB", "CONC_RB"]]
+    tabla_colorantes = tabla_colorantes.to_markdown(index=False)
+    list_observations = colorantes_df.loc[colorantes_df["FLAG_OBS"] == True, "TOBS"]
+
+    lista_lotes = []
+    print("revisamos si encontramos lotes")
+    for index, observacion in list_observations.items():
+        if 'lote' in str(observacion).lower() and '%' in str(observacion):
+            fila_temp = receta_colorantes_base_df.iloc[index]
+            cod_agrup = fila_temp['TCODIAGRP']
+            cod_color = fila_temp['TCODIPROD'][1:]
+            print("fila de colorante")
+            print("COD_AGRP:", cod_agrup, " - COD_COLOR:", cod_color)
+
+            lista_lotes = db_data2.get_lotes_df(int(cod_agrup), str(cod_color))
+            print("lista de lotes -> ", lista_lotes)
+    
+    color_observations = "Sin ajuste"
+    if len(list_observations) != 0:
+        color_observations = ", ".join(list_observations)
+
+    lote_intensidad = "Sin ajuste de intensidad"
+    lote_matiz = "Sin ajuste de matiz"
+    
+    if comparacion_lote_df['TLOTECOMP'].iloc[0] is not None and comparacion_lote_df['TLOTECOMP'].iloc[0] == lote_receta:
+        if comparacion_lote_df['TPORCINTE'].iloc[0] != 0:
+            valor = comparacion_lote_df['TPORCINTE'].iloc[0]
+            valor = valor * -1
+            lote_intensidad = "aplicar " + str(valor) + "% de intensidad"
+        
+        if comparacion_lote_df['TINDIMATZ'].iloc[0].strip() != '=':
+            color_matiz = comparacion_lote_df['TINDIMATZ'].iloc[0].strip()
+            valor_matiz = comparacion_lote_df['TPORCMATZ'].iloc[0]
+            valor_matiz = valor_matiz * -1
+            lote_matiz = "aplicar " + str(valor_matiz) + "% al color " + color_matiz
+
+    context = f"""
+    OBJETIVO: Ajustar automáticamente los valores de 'CONC_RB' basado en observaciones de tablas de referencia y devolver la tabla final con los resultados.
+
+    --- TABLAS DE ENTRADA ---
+    1. TABLA DE COLORANTES: Contiene los colorantes ajustados, a esta tabla se le aplicaran los ajuste
+
+    --- REGLAS DE AJUSTE ---
+    A) Tabla comparación de colorantes
+    Encontrarás 0 o más observaciones, lo que debes hacer es leer las observaciones y notar si hay ajuste por intensidad, matiz o lote
+     1. Intensidad: ejemplo (2% + int)
+        - Aplicar ajuste al colorante donde se encontró la observación, obtener la fila de la observación y aplicar ajuste a esa misma fila de la tabla
+     2. Matiz: ejemplo (3% +azul)
+        - Aplicar ajuste solo a un color, al color más cercano a la observación, ejemplo:
+        - Si hay 2 colores similares 1 rojo y otro rojo vino y el ajuste dice 3% +rojo, entonces aplicar solo al color rojo, no deberia aplicar al rojo vino
+        - Si en caso diga 2% +rojo y en los colorantes no hay ninguno que diga solo rojo, pero hay otro que dice rojo vino, aplicar a este al ser el más cercano
+     3. Lote: ejemplo (2% +azul que el lote ...)
+        - Debe mencionar 2 LOTES en observación y hacer un COMPARATIVO de lotes, un lote base y uno comparado, deben estar AMBOS LOTES como comparativo, en caso no estén 2 lotes como comparativo, entonces no es un ajuste por lote.
+        - Hay una tabla adicional "lista de lotes" al final que muestra una lista de lotes, si alguno de esos lotes coincide con el lote COMPARADO mencionado en la observación entonces aplicar ajuste ya sea de matiz o intensidad 
+    
+    B) Tabla comparación de Lote 
+     1. Intensidad
+     - Aplicar ajuste a TODOS los colorantes
+     2. Matiz
+     - Aplicar ajuste solo a 1 color, al color más cercano a la observación, aplicar misma lógica que ajuste de matiz de comparación de colorantes:
+
+    C) PRIORIDADES:
+    1. Aplicar primero intensidad, luego matiz.
+
+    **IMPORTANTE** 
+    - Siempre aplicar el inverso de lo que se encuentra (ej: 2% +rojo -> se debe aplicar -2% rojo)
+    - Aplicar: %Colorante Estimado = %Colorante Ajustado RB × (1 ± x%)  
+
+    --- FORMATO DE SALIDA ---
+    RESPUESTA TEXTUAL ÚNICA (NO código):
+    1. Explicación BREVE y RESUMIDA de cambios aplicados.
+    2. Mencionar si se aplica ajuste por colorantes, lote, ambos o ninguno; esto en letras grandes y/o en negrita
+    2. TABLA FINAL con las siguientes columnas:
+    - Todas las columnas originales de tabla de colorantes más 2 columnas de matiz e intensidad que se aplicarán:
+        * AJUSTE_INTENSIDAD
+        * AJUSTE_MATIZ
+    - COLUMNA FINAL: 'COL_FINAL' (resultado calculado).
+        **IMPORTANTE** Los valores deben redondearse a 4 decimales en todos los casos, en caso tenga menos decimales llenar con ceros.
+
+    ---------------------------------
+    *TABLA DE COLORANTES*
+    {tabla_colorantes}
+
+    *AJUSTE COMPARACION DE COLORANTES*
+    {color_observations}
+
+    *AJUSTE COMPARACION DE LOTE*
+    {lote_intensidad}
+    {lote_matiz}
+
+    *Adicional: Lista de lotes
+    {lista_lotes}
+    """
+
+    print("contexto para la ia:")
+    print(context)
+    response = model.generate_content(context)
+    respuesta_texto = response.text
+    return respuesta_texto
 
 if "manual_ol_df" not in st.session_state:
     st.session_state.manual_ol_df = pd.DataFrame()
@@ -543,9 +646,6 @@ def write_ol_mariadb(ol):
     except Exception as e:
         print(e)
 
-    except Exception as e:
-        print(e)
-
 def get_ols_from_mariadb():
     try:
         conn = pymysql.connect(**db_config)
@@ -644,7 +744,7 @@ def show_frontend():
         
             # Aqui acaba la busqueda de la receta correcta, ahora se buscará ajustar el colorante:
             st.markdown("----")
-            receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df = get_finals_dfs(receta_base_df['TCODIRECE'].iloc[0], ol['LOTE_STD'])
+            receta_colorantes_base_df, receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df = get_finals_dfs(receta_base_df['TCODIRECE'].iloc[0], ol['LOTE_STD'])
             if receta_colorantes_df.empty:
                 bad_recipes.append(receta_base_df['TCODIRECE'].iloc[0])
                 st.warning("No hay datos de colorantes para esta receta.")
@@ -656,9 +756,8 @@ def show_frontend():
         receta_colorantes_df['CONC_RB'] = round(receta_colorantes_df['TCONCPROD'] * (1 + (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100), 4)
         #st.markdown("Colorante ajustado por Relación de Baño")
         #st.markdown(receta_colorantes_df.to_markdown())
-
         with st.spinner("IA analizando, un momento por favor..."):
-            chat_response = decide_by_observation_gemini_four(receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
+            chat_response = decide_by_observation_gemini_five(receta_colorantes_base_df, receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
 
             st.markdown(chat_response)
             st.markdown("Receta Base Encontrada:")
