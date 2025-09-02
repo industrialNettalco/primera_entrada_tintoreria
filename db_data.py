@@ -110,6 +110,142 @@ def ol_description_df(ol_df):
     ol_df = ol_df[["OL","RECETA", "TCODICLIE", "TABRVCLIE", "CODIGO_COLOR", "DESCRIPCION_COLOR", "EP", "DESCRIPCION_TELA", "LOTE_STD", "RB", "TCANTINTE"]]
     return ol_df
 
+"""
+            select c.numero_ordem as ol,
+                rtrim(b.codigocolormaster) as receta,
+                trim(c.codigo_cor) as codigo_color,
+                d.tdesccolo as desc_color,
+                to_char(c.especificacao_produt) as ep,
+                f.tdesctela,
+                qnfcn_conv_char_a_number(c.lote_produto) as lote_std,
+                c.rb_padrao / 100 as rb,
+                e.tabrvclie,
+                e.tcodiclie,
+                c.tcantinte,
+                g.usuario, g.pi, g.reducido_cru, g.desc_reducido_cru, g.articulo_cru, g.tipo_receta, g.reproceso, g.tipo_pedido, g.tipo_registro, g.peso, g.factor, g.fechahora
+            from ordem_laboratorio   c,
+                ligacao_colormaster b,
+                tidocolo            d,
+                qndoclie            e,
+                tedotela            f,
+                sgt_ordem_laborat_confir g
+            where b.id_ligacaocolormaste = to_number(c.ordem_cliente)
+            and c.numero_ordem = {ol}
+            and trim(c.codigo_cor) = d.tcodicolo(+)
+            and d.tcodiclie = e.tcodiclie(+)
+            and SUBSTR(TO_CHAR(c.especificacao_produt), 1, LENGTH(TO_CHAR(c.especificacao_produt))-1) = f.tcoditela(+)
+            and c.numero_ordem = g.ol(+)
+            AND (g.fechahora = (SELECT MAX(fechahora) 
+                        FROM sgt_ordem_laborat_confir g2 
+                        WHERE g2.ol = g.ol) OR g.ol IS NULL)
+            order by c.numero_ordem desc
+            """
+
+
+"""
+            select 
+                ol
+            from 
+                sgt_ordem_laborat_confir
+            where fechahora >= sysdate - 2
+            """
+def ol_complete_df(ol):
+    conn = connection()
+    if conn:
+        try:
+            query = f"""
+            select c.numero_ordem as ol,
+                rtrim(b.codigocolormaster) as receta,
+                trim(c.codigo_cor) as codigo_color,
+                d.tdesccolo as desc_color,
+                to_char(c.especificacao_produt) as ep,
+                f.tdesctela,
+                qnfcn_conv_char_a_number(c.lote_produto) as lote_std,
+                c.rb_padrao / 100 as rb,
+                e.tabrvclie,
+                e.tcodiclie,
+                c.tcantinte,
+                g.usuario, g.pi, g.reducido_cru, g.desc_reducido_cru, g.articulo_cru, g.tipo_receta, g.reproceso, g.tipo_pedido, g.tipo_registro, g.peso, g.factor, g.fechahora
+            from ordem_laboratorio   c,
+                ligacao_colormaster b,
+                tidocolo            d,
+                qndoclie            e,
+                tedotela            f,
+                sgt_ordem_laborat_confir g
+            where b.id_ligacaocolormaste = to_number(c.ordem_cliente)
+            and c.numero_ordem = {ol}
+            and trim(c.codigo_cor) = d.tcodicolo(+)
+            and d.tcodiclie = e.tcodiclie(+)
+            and SUBSTR(TO_CHAR(c.especificacao_produt), 1, LENGTH(TO_CHAR(c.especificacao_produt))-1) = f.tcoditela(+)
+            and c.numero_ordem = g.ol(+)
+            AND (g.fechahora = (SELECT MAX(fechahora) 
+                        FROM sgt_ordem_laborat_confir g2 
+                        WHERE g2.ol = g.ol) OR g.ol IS NULL)
+            order by c.numero_ordem desc
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+            if not df.empty:
+                df["LOTE_STD"] = df["LOTE_STD"].astype(str)
+                return df
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+def ol_complete_df2():
+    conn = connection()
+    if conn:
+        try:
+            query = f"""
+            select c.numero_ordem as ol,
+                rtrim(b.codigocolormaster) as receta,
+                trim(c.codigo_cor) as codigo_color,
+                d.tdesccolo as desc_color,
+                to_char(c.especificacao_produt) as ep,
+                f.tdesctela,
+                qnfcn_conv_char_a_number(c.lote_produto) as lote_std,
+                c.rb_padrao / 100 as rb,
+                e.tabrvclie,
+                e.tcodiclie,
+                c.tcantinte,
+                g.usuario, g.pi, g.reducido_cru, g.desc_reducido_cru, g.articulo_cru, g.tipo_receta, g.reproceso, g.tipo_pedido, g.tipo_registro, g.peso, g.factor, g.fechahora
+            from ordem_laboratorio   c,
+                ligacao_colormaster b,
+                tidocolo            d,
+                qndoclie            e,
+                tedotela            f,
+                sgt_ordem_laborat_confir g
+            where b.id_ligacaocolormaste = to_number(c.ordem_cliente)
+            and c.numero_ordem in (select 
+                ol
+            from 
+                sgt_ordem_laborat_confir
+            where fechahora >= sysdate - 7)
+            and trim(c.codigo_cor) = d.tcodicolo(+)
+            and d.tcodiclie = e.tcodiclie(+)
+            and SUBSTR(TO_CHAR(c.especificacao_produt), 1, LENGTH(TO_CHAR(c.especificacao_produt))-1) = f.tcoditela(+)
+            and c.numero_ordem = g.ol(+)
+            AND (g.fechahora = (SELECT MAX(fechahora) 
+                        FROM sgt_ordem_laborat_confir g2 
+                        WHERE g2.ol = g.ol) OR g.ol IS NULL)
+            order by c.numero_ordem desc
+            """
+            df = pd.read_sql(query, conn)
+            conn.close()
+            if not df.empty:
+                return df
+            else:
+                return pd.DataFrame()
+        except Exception as e:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+#print("OL completo!!")
+#print(ol_complete_df(157211).columns)
+#print(ol_complete_df2())
+
 def get_data_from_specific_ols():
     ols = [158656, 150834, 158649, 158655, 158659, 158086, 158581, 157564, 158653, 158675, 158679, 158803, 158279, 157841, 158663, 158617, 154478, 157136, 158855, 158848, 158854, 155385, 157518, 158763, 158838, 158838]
     data_total = []
@@ -326,9 +462,9 @@ def get_lotes_df(cod_agrupador, cod_color):
             return ""
     return None
 
-#print("libreacion de colorantes:")
-#df = get_lotes_df(1007777, "8438")
-#print(df)
+print("liberacion de colorantes:")
+df = get_lotes_df(1007777, "8438")
+print(df)
 
 def get_observation_df_two(cod_color):
     conn = connection()

@@ -2,7 +2,6 @@ import pandas as pd
 import db_data2
 import warnings
 import os
-import json
 from openai import OpenAI
 from google import genai
 import google.generativeai as genai
@@ -10,6 +9,8 @@ from dotenv import load_dotenv
 import streamlit as st
 import cx_Oracle
 import pymysql
+import requests
+from streamlit_cookies_controller import CookieController
 
 # --------------------- CONFIGURACIONES ------------------------
 
@@ -19,6 +20,8 @@ load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=api_key)
 
+PORT = "5021"
+LOGIN_URL = f"http://128.0.16.240:{PORT}"  # URL del login en Flask
 DEEPSEEK_MODEL_V3 = "deepseek-chat"
 GEMINI_MODEL_2_0_FLASH =  "gemini-2.0-flash"
 GEMINI_MODEL_2_5_FLASH = "gemini-2.5-flash"
@@ -35,6 +38,8 @@ DB_PRENDAS_HOST = os.getenv("DB_PRENDAS_HOST")
 DB_PRENDAS_PORT = os.getenv("DB_PRENDAS_PORT")
 DB_PRENDAS_NAME = os.getenv("DB_PRENDAS_NAME")
 
+SAVE_RESPONSE_URL = f"http://128.0.16.240:{PORT}/save_response" # URL de historial
+
 dsn = cx_Oracle.makedsn(DB_HOST, DB_PORT, sid=DB_NAME)
 connection = cx_Oracle.connect(user=DB_USER, password=DB_PASSWORD, dsn=dsn)
 
@@ -49,6 +54,36 @@ db_config = {
 }
 
 # -------------------------------------------------------------------
+
+def get_user():
+    """Recupera el usuario autenticado desde Flask"""
+    controller = CookieController()
+
+    token = st.query_params.get("token")
+    if token:
+        controller.set("user_token", token)
+    else:
+        token = controller.get("user_token")
+
+    if not token:
+        return "Error session", ""
+
+    # Validar token con Flask
+    headers = {"Authorization": f"Bearer {token}"}
+    response = requests.get(f"{LOGIN_URL}/protected", headers=headers)
+
+    if response.status_code == 200:
+        data = response.json()
+        username = data.get("username")  # Obtener username
+        usercode = data.get("usercode")  # Obtener usercode
+        return username, usercode
+    else:
+        controller.set("user_token", "")
+        return "Error expired", ""
+
+def close_session():
+    controller = CookieController()
+    controller.set("user_token", "")
 
 def get_recipes_by_colors(colors):
     recipes_df = pd.DataFrame()
@@ -96,17 +131,21 @@ def get_recipes_by_color(color, receta):
                 machine_color = get_color_from_matching(color)
                 if not machine_color:
                     st.warning("No se encontró similitud por color, solidez ni por código Matching")
+                    st.session_state.history += "No se encontró similitud por color, solidez ni por código Matching\n"
                 else:
                     recipe_df = db_data2.get_recipes_complete(machine_color)
                     print("colooor ->>>>>", machine_color, "otra cosa")
                     print(type(machine_color))
                     print(recipe_df)
                     st.markdown("Recetas No encontradas por Color, pero se encontró por CÓDIGO MATCHING")
+                    st.session_state.history += "Recetas No encontradas por Color, pero se encontró por CÓDIGO MATCHING\n"
             else:
                 recipe_df = db_data2.get_recipes_complete(solidity_color)
                 st.markdown("Recetas No encontradas por Color, pero se encontró por SOLIDEZ")
+                st.session_state.history += "Recetas No encontradas por Color, pero se encontró por SOLIDEZ\n"
     else:
         st.markdown("Recetas encontradas con el mismo Color")
+        st.session_state.history += "Recetas encontradas con el mismo Color\n"
 
     return recipe_df
 
@@ -128,10 +167,14 @@ def filter_by_ep(data_df, ep):
     data_by_ep = data_df[data_df["TCODIARTI"] == ep_str]
     if data_by_ep.empty:
         st.warning("No se encontró datos con EP similar")
+        st.session_state.history += "No se encontró datos con EP similar\n"
         return df, False
     else:
         st.markdown("Datos filtrados por similaridad de EP:")
+        st.session_state.history += "Datos filtrados por similaridad de EP:\n"
+
         st.dataframe(data_by_ep)
+        st.session_state.history += data_by_ep.to_markdown(index=False) + '\n\n'
         return data_by_ep, True
 
 def filter_by_repro(data_df):
@@ -142,7 +185,10 @@ def filter_by_repro(data_df):
     if df.empty:
         return data_df
     st.markdown("filtramos solo los SL")
+    st.session_state.history += "filtramos solo los SL:\n"
+    
     st.dataframe(df)
+    st.session_state.history += df.to_markdown(index=False) + '\n\n'
     return df
 
 def filter_by_lote(data_df, lote_std, flag):
@@ -153,13 +199,17 @@ def filter_by_lote(data_df, lote_std, flag):
     if data_by_lote_std.empty:
         if flag == False:
             st.markdown("No se encontró datos con LOTE")
+            st.session_state.history += "No se encontró datos con LOTE\n"
             return df
         lote_comp = get_lote_comp_from_data(lote_std)
         data_by_lote_comp = filter_by_lote(data_df, lote_comp, False)
         return data_by_lote_comp
     else:
         st.markdown("Datos filtrados por LOTE estandar:")
+        st.session_state.history += "Datos filtrados por LOTE estandar:\n"
+
         st.dataframe(data_by_lote_std)
+        st.session_state.history += data_by_lote_std.to_markdown(index=False) + '\n\n'
         return data_by_lote_std
 
 def get_lote_comp_from_data(lote_std):
@@ -170,6 +220,7 @@ def get_lote_comp_from_data(lote_std):
 def filter_by_rb(data_df, rb):
     df = data_df.copy()
     st.markdown("Datos filtrado por RB:")
+    st.session_state.history += "Datos filtrado por RB:\n"
     data_df["TRELABANO"] = data_df["TRELABANO"].astype(int)
     rb_int = int(rb)
     data_less_df = data_df[data_df["TRELABANO"] <= 8]
@@ -177,6 +228,7 @@ def filter_by_rb(data_df, rb):
         min_value = data_less_df["TRELABANO"].min()
         new_data_df = data_less_df[data_less_df["TRELABANO"] == min_value]
         st.dataframe(new_data_df)
+        st.session_state.history += new_data_df.to_markdown(index=False) + '\n\n'
         return new_data_df
     else:
         data_df["DIFERENCIA"] = (data_df["TRELABANO"] - rb_int).abs()
@@ -184,79 +236,110 @@ def filter_by_rb(data_df, rb):
         closest_df = data_df[data_df["DIFERENCIA"] == min_diff]
         closest_df = closest_df.drop(columns=["DIFERENCIA"])
         st.dataframe(closest_df)
+        st.session_state.history += closest_df.to_markdown(index=False) + '\n\n'
         return closest_df
 
 def filter_by_stage(data_df):
     st.markdown("Datos filtrados por Etapa de Receta:")
+    st.session_state.history += "Datos filtrados por Etapa de Receta:\n"
     filtro1 = data_df[(data_df['TESTARECE'] == 'G') & (data_df['TTIPORECE'] == 'P')]
     if not filtro1.empty:
         st.markdown("filtrado por recetas en producción")
+        st.session_state.history += "filtrado por recetas en producción\n"
+
         st.dataframe(filtro1)
+        st.session_state.history += filtro1.to_markdown(index=False) + '\n\n'
         return filtro1
     else:
         mask_lab_dip = data_df['TRECE_SEQ'].str.contains(r'^la', case=False, na=False, regex=True)
         filtro2 = data_df[mask_lab_dip]
         if not filtro2.empty:
             st.markdown("filtrado por recetas en LAB DIP")
+            st.session_state.history += "filtrado por recetas en LAB DIP\n"
+
             st.dataframe(filtro2)
+            st.session_state.history += filtro2.to_markdown(index=False) + '\n\n'
             return filtro2
         else:
             mask_muestra = data_df['TRECE_SEQ'].str.contains('MUESTRA', case=False, na=False)
             filtro3 = data_df[mask_muestra]
             if not filtro3.empty:
                 st.markdown("filtrado por recetas en MUESTRA")
+                st.session_state.history += "filtrado por recetas en MUESTRA\n"
+
                 st.dataframe(filtro3)
+                st.session_state.history += filtro3.to_markdown(index=False) + '\n\n'
                 return filtro3
             else:
                 mask_desarrollo = data_df['TRECE_SEQ'].str.contains('DESARROLLO', case=False, na=False)
                 filtro4 = data_df[mask_desarrollo]
                 if not filtro4.empty:
                     st.markdown("filtrado por recetas en DESARROLLO")
+                    st.session_state.history += "filtrado por recetas en DESARROLLO\n"
+
                     st.dataframe(filtro4)
+                    st.session_state.history += filtro4.to_markdown(index=False) + '\n\n'
                     return filtro4
                 else:
                     st.markdown("No se pudo filtrar por etapas")
+                    st.session_state.history += "No se pudo filtrar por etapas\n"
                     return data_df
 
 def filter_by_stage_labdip(data_df):
     st.markdown("Datos filtrados por Etapa de Receta:")
+    st.session_state.history += "Datos filtrados por Etapa de Receta:\n"
     
     mask_lab_dip = data_df['TRECE_SEQ'].str.contains(r'^la', case=False, na=False, regex=True)
     filtro1 = data_df[mask_lab_dip]
     if not filtro1.empty:
         st.markdown("filtrado por recetas en LAB DIP")
+        st.session_state.history += "filtrado por recetas en LAB DIP\n"
+
         st.dataframe(filtro1)
+        st.session_state.history += filtro1.to_markdown(index=False) + '\n\n'
         return filtro1
     else:
         filtro2 = data_df[(data_df['TESTARECE'] == 'G') & (data_df['TTIPORECE'] == 'P')]
         if not filtro2.empty:
             st.markdown("filtrado por recetas en producción")
+            st.session_state.history += "filtrado por recetas en producción\n"
+
             st.dataframe(filtro2)
+            st.session_state.history += filtro2.to_markdown(index=False) + '\n\n'
             return filtro2
         else:
             mask_muestra = data_df['TRECE_SEQ'].str.contains('MUESTRA', case=False, na=False)
             filtro3 = data_df[mask_muestra]
             if not filtro3.empty:
                 st.markdown("filtrado por recetas en MUESTRA")
+                st.session_state.history += "filtrado por recetas en MUESTRA\n"
+
                 st.dataframe(filtro3)
+                st.session_state.history += filtro3.to_markdown(index=False) + '\n\n'
                 return filtro3
             else:
                 mask_desarrollo = data_df['TRECE_SEQ'].str.contains('DESARROLLO', case=False, na=False)
                 filtro4 = data_df[mask_desarrollo]
                 if not filtro4.empty:
                     st.markdown("filtrado por recetas en DESARROLLO")
+                    st.session_state.history += "filtrado por recetas en DESARROLLO\n"
+
                     st.dataframe(filtro4)
+                    st.session_state.history += filtro4.to_markdown(index=False) + '\n\n'
                     return filtro4
                 else:
                     st.markdown("No se pudo filtrar por etapas")
+                    st.session_state.history += "No se pudo filtrar por etapas\n"
                     return data_df
 
 def filter_by_date(data_df):
     st.markdown("Datos filtrados por Fecha más reciente:")
+    st.session_state.history += "Datos filtrados por Fecha más reciente:\n"
     data_df['TFECHACTU'] = pd.to_datetime(data_df['TFECHACTU'])
     df_mas_reciente = data_df.sort_values('TFECHACTU', ascending=False).head(1)
     df_mas_reciente = df_mas_reciente.reset_index(drop=True)
     st.dataframe(df_mas_reciente)
+    st.session_state.history += df_mas_reciente.to_markdown(index=False) + '\n\n'
     return df_mas_reciente
 
 def set_good_colors(data_df):
@@ -293,20 +376,28 @@ def get_finals_dfs(recipe, ol_lote_std):
     receta_colorantes_base_df = tricromia_df.copy()
     receta_colorantes_df = tricromia_df
     st.markdown("Tricromía para la receta base: RECETA COLORANTES BASE")
+    st.session_state.history += "Tricromía para la receta base: RECETA COLORANTES BASE\n"
     st.dataframe(receta_colorantes_df)
+    st.session_state.history += receta_colorantes_df.to_markdown(index=False) + '\n\n'
     receta_colorantes_df['FLAG_OBS'] = False
     receta_colorantes_df = set_good_colors(receta_colorantes_df)
     st.markdown("Cambio por colorantes que NO digan NO USAR")
+    st.session_state.history += "Cambio por colorantes que NO digan NO USAR\n"
     st.dataframe(receta_colorantes_df)
+    st.session_state.history += receta_colorantes_df.to_markdown(index=False) + '\n\n'
 
     tricromia_df['TOBS'] = tricromia_df['TCODIPROD'].apply(lambda x: get_observation(x))
     comparacion_colorantes_df = tricromia_df[['TCODIPROD', 'TCODIAGRP', 'TDESCPROD', 'TOBS']]
     st.markdown("Observaciones para tricromía: COMPARACION COLORANTES EST")
+    st.session_state.history += "Observaciones para tricromía: COMPARACION COLORANTES EST\n"
     st.dataframe(comparacion_colorantes_df)
+    st.session_state.history += comparacion_colorantes_df.to_markdown(index=False) + '\n\n'
 
     comparacion_lote_est_df = db_data2.lote_std_df(int(ol_lote_std))
     st.markdown("COMPARACION LOTE STD")
+    st.session_state.history += "COMPARACION LOTE STD\n"
     st.dataframe(comparacion_lote_est_df)
+    st.session_state.history += comparacion_lote_est_df.to_markdown(index=False) + '\n\n'
 
     return receta_colorantes_base_df, receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df
 
@@ -498,6 +589,7 @@ if "use_manual_ol" not in st.session_state:
 
 def set_manual_ol():
     st.markdown("### Ingrese los datos de la OL manualmente")
+    st.session_state.history += "### Ingrese los datos de la OL manualmente\n"
     with st.form("manual_ol_form"):
         manual_receta = st.text_input("RECETA", placeholder="Ej. SL00158006", key="manual_receta")
         manual_codigo_color = st.text_input("CODIGO_COLOR", placeholder="Ej. 84207", key="manual_codigo_color")
@@ -657,6 +749,22 @@ def get_ols_from_mariadb():
     except Exception as e:
         print(e)
 
+def save_in_history(ol, history):
+    if ol and history:
+        data = {
+            "username" : st.session_state.username,
+            "usercode" : st.session_state.usercode,
+            "ol" : ol,
+            "history" : history
+        }
+
+        response = requests.post(SAVE_RESPONSE_URL, json=data)
+
+        if response.status_code == 201:
+            print("Se guardó en el historial correctamente!")
+        else:
+            print("no se guardo en el historial")
+            print(response)
 
 def show_frontend():
     col1, col2 = st.columns([2, 5])  # 4/5 del ancho para el input, 1/5 para el botón
@@ -690,7 +798,9 @@ def show_frontend():
             return
         
         st.markdown("Datos de OL:")
+        st.session_state.history += "Datos de OL:\n"
         st.dataframe(ol)
+        st.session_state.history += ol.to_markdown(index=False) + '\n\n'
         ol = ol.loc[0]
 
         again = True
@@ -704,9 +814,12 @@ def show_frontend():
             
             for recipe in bad_recipes:
                 receta_base_df = receta_base_df[receta_base_df["TCODIRECE"] != recipe]
-            st.dataframe(receta_base_df)
+            if not receta_base_df.empty:
+                st.dataframe(receta_base_df)
+                st.session_state.history += receta_base_df.to_markdown(index=False) + '\n\n'
 
             if receta_base_df.empty:
+                save_in_history(int(ol['OL']), st.session_state.history)
                 return
             
             if receta_base_df["TCODIRECE"].isin([ol["RECETA"]]).any():
@@ -714,6 +827,7 @@ def show_frontend():
             
             if receta_base_df.empty:
                 st.warning("La única receta encontrada es a si misma, no hay más recetas por analizar")
+                st.session_state.history += "La única receta encontrada es a si misma, no hay más recetas por analizar\n"
                 return
             
 
@@ -744,10 +858,12 @@ def show_frontend():
         
             # Aqui acaba la busqueda de la receta correcta, ahora se buscará ajustar el colorante:
             st.markdown("----")
+            st.session_state.history += "\n-----------------------------------------------\n\n"
             receta_colorantes_base_df, receta_colorantes_df, comparacion_colorantes_df, comparacion_lote_est_df = get_finals_dfs(receta_base_df['TCODIRECE'].iloc[0], ol['LOTE_STD'])
             if receta_colorantes_df.empty:
                 bad_recipes.append(receta_base_df['TCODIRECE'].iloc[0])
                 st.warning("No hay datos de colorantes para esta receta.")
+                st.session_state.history += "No hay datos de colorantes para esta receta.\n"
                 again = False
                 return 
             else: 
@@ -755,13 +871,20 @@ def show_frontend():
         receta_colorantes_df['AJUTE_RB'] = (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100
         receta_colorantes_df['CONC_RB'] = round(receta_colorantes_df['TCONCPROD'] * (1 + (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100), 4)
         #st.markdown("Colorante ajustado por Relación de Baño")
+        #st.session_state.history += "Colorante ajustado por Relación de Baño\n"
         #st.markdown(receta_colorantes_df.to_markdown())
+        #st.session_state.history += receta_colorantes_df.to_markdown(index=False)
         with st.spinner("IA analizando, un momento por favor..."):
             chat_response = decide_by_observation_gemini_five(receta_colorantes_base_df, receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
 
             st.markdown(chat_response)
+            st.session_state.history += chat_response + "\n"
             st.markdown("Receta Base Encontrada:")
+            st.session_state.history += "\nReceta Base Encontrada:\n"
             st.dataframe(receta_base_df)
+            st.session_state.history += receta_base_df.to_markdown(index=False)
+
+        save_in_history(int(ol['OL']), st.session_state.history)
 
 def show_sidebar():
     with st.sidebar:
@@ -777,6 +900,9 @@ def show_sidebar():
 
         if selection:
             st.session_state.ol_selected = selection
+
+        if st.button("Historial"):
+            print("historial")
 
         st.markdown("-----")
 
@@ -802,8 +928,18 @@ def show_sidebar():
                 write_ol_mariadb(ol)
             st.success("OLs cargados, recargar pagina para visualizar en desplegable")
 
+        if st.button("🚪 Salir", key="logout_button"):
+            close_session()
+            st.markdown(f'<meta http-equiv="refresh" content="0;URL={LOGIN_URL}">', unsafe_allow_html=True)
+
 
 # ------------------------------- Estados iniciales ---------------------------------
+
+if "username" not in st.session_state:
+    st.session_state.username = None
+
+if "usercode" not in st.session_state:
+    st.session_state.usercode = None
 
 if "button_ols_disable" not in st.session_state:
     st.session_state.button_ols_disable = True
@@ -818,6 +954,8 @@ if "show_ols_df" not in st.session_state:
 if "ol_selected" not in st.session_state:
     st.session_state.ol_selected = None
 
+if "history" not in st.session_state:
+    st.session_state.history = ""
 
 # ------------------------------------------------------------------------------------
 
@@ -825,10 +963,23 @@ st.set_page_config(page_title="1er Matizado", page_icon="📊", layout="wide")
 st.set_option('deprecation.showPyplotGlobalUse', False)
 st.title("Análisis de Matizado - Primera Entrada")
 
-show_sidebar()
+with st.spinner("Cargando usuario..."):
+    if st.session_state.username is None:
+        st.session_state.username, st.session_state.usercode = get_user()
 
-show_frontend()
-if st.session_state.show_ols_df:
-    st.dataframe(st.session_state.ols_df)
-    st.session_state.show_ols_df = False
+if st.session_state.username == "Error session":
+    st.warning("No hay sesión activa. Por favor Inicie Sesión")
+    if st.button("Ir al Login"):
+        st.markdown(f'<meta http-equiv="refresh" content="0;URL={LOGIN_URL}">', unsafe_allow_html=True)
+elif st.session_state.username == "Error expired":
+    st.warning("La sesión ha expirado. Por favor inicie sesión nuevamente.")
+    if st.button("Ir al Login"):
+        st.markdown(f'<meta http-equiv="refresh" content="0;URL={LOGIN_URL}">', unsafe_allow_html=True)
+else:
+    show_sidebar()
+
+    show_frontend()
+    if st.session_state.show_ols_df:
+        st.dataframe(st.session_state.ols_df)
+        st.session_state.show_ols_df = False
 
