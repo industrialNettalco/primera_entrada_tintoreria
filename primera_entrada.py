@@ -96,25 +96,20 @@ def get_recipes_by_colors(colors):
 def get_color_from_solidity(color):
     new_color = ""
     color_description = db_data2.get_description_color(color)
-    print("descripcionoooonnononon ->", color_description)
     if color_description:
         if 'sol' in color_description.lower():
-            print("entro al if")
             new_color = color_description[-5:]
-    print(new_color)
+    print("nuevo color desde solidity", new_color)
     return new_color
 
 def get_color_from_matching(color):
     new_color = ""
     color_description = db_data2.get_description_color(color)
-    print("descripcionoooonnononon ->", color_description)
     if color_description:
         last_digits = color_description[-7:]
-        print("last digits, ", last_digits)
         if not 'tcx' in last_digits.lower() and 'c' in last_digits.lower():
-            print("entro al if")
             new_color = last_digits[-5:]
-    print(new_color)
+    print("nuevo color desde cod matching", new_color)
     return new_color
 
 def get_recipes_by_color(color, receta):
@@ -135,7 +130,6 @@ def get_recipes_by_color(color, receta):
                 else:
                     recipe_df = db_data2.get_recipes_complete(machine_color)
                     print("colooor ->>>>>", machine_color, "otra cosa")
-                    print(type(machine_color))
                     print(recipe_df)
                     st.markdown("Recetas No encontradas por Color, pero se encontró por CÓDIGO MATCHING")
                     st.session_state.history += "Recetas No encontradas por Color, pero se encontró por CÓDIGO MATCHING\n"
@@ -188,7 +182,8 @@ def filter_by_repro(data_df):
     st.session_state.history += "filtramos solo los SL:\n"
     
     st.dataframe(df)
-    st.session_state.history += df.to_markdown(index=False) + '\n\n'
+    copy_df = df.head(30)
+    st.session_state.history += copy_df.to_markdown(index=False) + '\n\n'
     return df
 
 def filter_by_lote(data_df, lote_std, flag):
@@ -360,7 +355,6 @@ def set_good_colors(data_df):
 
 def get_observation(cod_color):
     cod_color = cod_color[1:]
-    print("codigo de colorante")
     observations_df = db_data2.get_observation_df(cod_color)
     if observations_df.empty:
         return ""
@@ -473,8 +467,8 @@ def decide_by_observation_gemini_four(colorantes_df, comparacion_lote_df, lote_r
     {lote_matiz}
     """
 
-    print("contexto para la ia:")
-    print(context)
+    #print("contexto para la ia:")
+    #print(context)
     response = model.generate_content(context)
     respuesta_texto = response.text
     return respuesta_texto
@@ -486,17 +480,21 @@ def decide_by_observation_gemini_five(receta_colorantes_base_df, colorantes_df, 
     list_observations = colorantes_df.loc[colorantes_df["FLAG_OBS"] == True, "TOBS"]
 
     lista_lotes = []
-    print("revisamos si encontramos lotes")
     for index, observacion in list_observations.items():
         if 'lote' in str(observacion).lower() and '%' in str(observacion):
             fila_temp = receta_colorantes_base_df.iloc[index]
             cod_agrup = fila_temp['TCODIAGRP']
             cod_color = fila_temp['TCODIPROD'][1:]
-            print("fila de colorante")
-            print("COD_AGRP:", cod_agrup, " - COD_COLOR:", cod_color)
+            #print("fila de colorante")
+            #print("COD_AGRP:", cod_agrup, " - COD_COLOR:", cod_color)
 
             lista_lotes = db_data2.get_lotes_df(int(cod_agrup), str(cod_color))
-            print("lista de lotes -> ", lista_lotes)
+            #print("lista de lotes -> ", lista_lotes)
+            if len(lista_lotes) > 0:
+                st.markdown("Lista de lotes válidos para LOTE COMPARADO de colorante")
+                st.session_state.history += "Lista de lotes válidos para LOTE COMPARADO de colorante\n"
+                st.markdown(lista_lotes)
+                st.session_state.history += str(lista_lotes) + "\n\n"
     
     color_observations = "Sin ajuste"
     if len(list_observations) != 0:
@@ -575,8 +573,8 @@ def decide_by_observation_gemini_five(receta_colorantes_base_df, colorantes_df, 
     {lista_lotes}
     """
 
-    print("contexto para la ia:")
-    print(context)
+    #print("contexto para la ia:")
+    #print(context)
     response = model.generate_content(context)
     respuesta_texto = response.text
     return respuesta_texto
@@ -617,22 +615,6 @@ def set_manual_ol():
                 st.session_state.use_manual_ol = True
                 st.rerun()
 
-def verify_user(user: str, pwd: str):
-    try:
-        cursor = connection.cursor()
-        username = cursor.var(cx_Oracle.STRING)
-        p_menserro = cursor.var(cx_Oracle.STRING)
-        cursor.callproc("prc_login",[user, pwd, username, p_menserro])
-        if p_menserro.getvalue():
-            return p_menserro.getvalue()
-        else:
-            return username.getvalue(), "Verificacion Correcta"
-
-    except Exception as e:
-        print(e)
-    finally:
-        cursor.close()
-
 def create_ol_proc(red_crudo, color, cliente, ep, pi, lote, rb):
     try:
         cursor = connection.cursor()
@@ -641,14 +623,13 @@ def create_ol_proc(red_crudo, color, cliente, ep, pi, lote, rb):
         p_mensavis = cursor.var(cx_Oracle.STRING)
         p_menserro = cursor.var(cx_Oracle.STRING)
         cursor.callproc("lbpkg_gestion_ols.prc_crea_ol_manual",[color, ep, red_crudo, lote, rb, cliente, pi, ol, receta, p_mensavis, p_menserro])
-        print(p_mensavis.getvalue())
-        print(p_menserro.getvalue())
-        #print(ol.getvalue())
-        #print(receta.getvalue())
         if p_menserro.getvalue():
-            ol = p_menserro.getvalue().split("OL")[1].split(' ')[1]
-            receta = p_menserro.getvalue().split("Receta")[1].split(' ')[1]
-            return ol, receta
+            if "OL" in p_menserro.getvalue():
+                ol = p_menserro.getvalue().split("OL")[1].split(' ')[1]
+                receta = p_menserro.getvalue().split("Receta")[1].split(' ')[1]
+                return ol, receta
+            else:
+                return p_menserro.getvalue(), "No se creó OL ni Receta"
         else:
             return ol.getvalue(), receta.getvalue()
 
@@ -683,30 +664,38 @@ def asignar_valores(row):
     if 'OL' in row and 'RECETA' in row:
         return row['OL'], row['RECETA']
     elif es_valor_valido(row["TREDUCRUD"]) and es_valor_valido(row["Color"]) and es_valor_valido(row["TCODICLIE"]) and es_valor_valido(row["EP"]) and es_valor_valido(row["PI"]) and es_valor_valido(row["Lote"]) and es_valor_valido(row["RB"]):
-        print("validooooo con el color:", row["Color"])
         return create_ol_proc(row["TREDUCRUD"], row["Color"], row["TCODICLIE"], row["EP"], row["PI"], row["Lote"], row["RB"])
         #return "111", "SL00222"
     else:
-        print("noooooo val:", row["Color"])
+        print("encontro que no es validooo")
         return " ", " "
 
 def create_ols(uploaded_file):
     if uploaded_file is not None:
-        # Determinar el tipo de archivo y cargarlo adecuadamente
         try:
             if uploaded_file.type == "text/csv":
-                # Es un archivo CSV
                 df = pd.read_csv(uploaded_file, dtype={'Color': str, 'Lote': str, 'TCODICLIE': str})
                 st.success("Archivo CSV cargado correctamente!")
             elif uploaded_file.type in ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
                                     "application/vnd.ms-excel"]:
-                # Es un archivo Excel (.xlsx o .xls)
-                df = pd.read_excel(uploaded_file, dtype={'Color': str, 'Lote': str, 'TCODICLIE': str})
+                # Intentar determinar la extensión para elegir el motor
+                if uploaded_file.name.endswith('.xlsx'):
+                    df = pd.read_excel(uploaded_file, engine='openpyxl', dtype={'Color': str, 'Lote': str, 'TCODICLIE': str})
+                    print(".XLSX")
+                    print(df)
+                else:
+                    # Para .xls, usar xlrd
+                    df = pd.read_excel(uploaded_file, engine='xlrd', dtype={'Color': str, 'Lote': str, 'TCODICLIE': str})
+                    print("REVISARR EXCEL XLS ---- DF")
+                    print(df)
                 st.success("Archivo Excel cargado correctamente!")
             else:
                 st.error("Formato de archivo no soportado")
             
+            df = df.dropna(how='all')
             df[['OL', 'RECETA']] = df.apply(asignar_valores, axis=1, result_type='expand')
+            print("DF FINAL!!")
+            print(df)
             st.session_state.ols_df = df
             
         except Exception as e:
@@ -738,6 +727,21 @@ def write_ol_mariadb(ol):
     except Exception as e:
         print(e)
 
+def get_history():
+    try:
+        conn = pymysql.connect(**db_config)
+        query = "SELECT * FROM prdohistmatz LIMIT 100"
+        df = pd.read_sql(query, conn)
+        conn.close()
+
+        if not df.empty:
+            return df
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        print(e)
+        return pd.DataFrame
+
 def get_ols_from_mariadb():
     try:
         conn = pymysql.connect(**db_config)
@@ -767,15 +771,14 @@ def save_in_history(ol, history):
             print(response)
 
 def show_frontend():
+    st.title("Análisis de Matizado - Primera Entrada")
     col1, col2 = st.columns([2, 5])  # 4/5 del ancho para el input, 1/5 para el botón
 
     user_input = None
     if st.session_state.ol_selected:
         user_input = st.session_state.ol_selected
-        print("seteamos user input:", user_input)
         st.session_state.ol_selected = None
 
-    print("user_input:", user_input)
     if not user_input:
         with col1:
             user_input = st.text_input(
@@ -784,8 +787,8 @@ def show_frontend():
                 key="user_input_field",
             )
     
-    print("user_input 2:", user_input)
     if user_input:
+        st.session_state.history = ""
         if st.session_state.use_manual_ol:
             ol = st.session_state.manual_ol_df
             st.session_state.use_manual_ol = False
@@ -816,7 +819,8 @@ def show_frontend():
                 receta_base_df = receta_base_df[receta_base_df["TCODIRECE"] != recipe]
             if not receta_base_df.empty:
                 st.dataframe(receta_base_df)
-                st.session_state.history += receta_base_df.to_markdown(index=False) + '\n\n'
+                copy_receta_df = receta_base_df.head(30)
+                st.session_state.history += copy_receta_df.to_markdown(index=False) + '\n\n'
 
             if receta_base_df.empty:
                 save_in_history(int(ol['OL']), st.session_state.history)
@@ -870,10 +874,7 @@ def show_frontend():
                 again = False
         receta_colorantes_df['AJUTE_RB'] = (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100
         receta_colorantes_df['CONC_RB'] = round(receta_colorantes_df['TCONCPROD'] * (1 + (float(ol['RB']) - receta_base_df['TRELABANO'].iloc[0]) / 100), 4)
-        #st.markdown("Colorante ajustado por Relación de Baño")
-        #st.session_state.history += "Colorante ajustado por Relación de Baño\n"
-        #st.markdown(receta_colorantes_df.to_markdown())
-        #st.session_state.history += receta_colorantes_df.to_markdown(index=False)
+
         with st.spinner("IA analizando, un momento por favor..."):
             chat_response = decide_by_observation_gemini_five(receta_colorantes_base_df, receta_colorantes_df, comparacion_lote_est_df, int(receta_base_df["TCODILOTE"].iloc[0]))
 
@@ -886,25 +887,56 @@ def show_frontend():
 
         save_in_history(int(ol['OL']), st.session_state.history)
 
+    if st.session_state.show_ols_df:
+        st.dataframe(st.session_state.ols_df)
+        st.session_state.show_ols_df = False
+
 def show_sidebar():
     with st.sidebar:
-        st.header("Creación y Carga de OLs")
-
-        ol_options = get_ols_from_mariadb()
-        selection = st.selectbox(
-            "Seleccione una OL:",
-            options=ol_options,
-            index=None,
-            key="sidebar_selectbox"
+        st.markdown(
+            f"""
+            <div style="
+                padding: 10px;
+                border-radius: 10px;
+                background-color: var(--secondary-background-color);
+                text-align: center;
+                color: var(--text-color);
+            ">
+                <h2>👤 Usuario: {st.session_state.username }</h2> 
+            </div>
+            """,
+            unsafe_allow_html=True
         )
+        #st.header("Creación y Carga de OLs")
 
-        if selection:
-            st.session_state.ol_selected = selection
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("📜 Historial"):
+                st.session_state.show_history = True
+                st.session_state.history_detail = ""
+                st.session_state.ol_selected = None
+                st.rerun()
+        with col2:
+            if st.button("🏠 Inicio"):
+                st.session_state.show_history = False
+                st.session_state.history_detail = ""
+                st.session_state.ol_selected = None
+                st.rerun()
+        
+        ol_options = get_ols_from_mariadb()
 
-        if st.button("Historial"):
-            print("historial")
+        with st.expander("## Seleccione una OL", expanded=False):
+            for ol in ol_options:
+                ol_str = str(ol)
+                if st.button(ol_str, key=ol_str):
+                    st.session_state.ol_selected = ol_str
+                    st.session_state.show_history = False
+                    st.session_state.history_detail = ""
+                    st.rerun()
 
         st.markdown("-----")
+
+        st.subheader("Creación y Carga de OLs")
 
         uploaded_file = st.file_uploader(
             "Sube tu archivo CSV o Excel",
@@ -932,6 +964,105 @@ def show_sidebar():
             close_session()
             st.markdown(f'<meta http-equiv="refresh" content="0;URL={LOGIN_URL}">', unsafe_allow_html=True)
 
+def show_history():
+    df_history = get_history()
+    
+    if df_history.empty:
+        st.warning("No hay historial disponible.")
+        return
+    
+    # Convertir la fecha a datetime si no lo está ya
+    if 'TFECHCONS' in df_history.columns:
+        df_history['TFECHCONS'] = pd.to_datetime(df_history['TFECHCONS'])
+    
+    # Ordenar por fecha (más reciente primero)
+    df_history = df_history.sort_values('TFECHCONS', ascending=False)
+    
+    st.title("📋 Historial de Consultas")
+    total_records = len(df_history)
+
+    col1, col2, col3 = st.columns([2, 4, 1])
+
+    with col3:
+        records_per_page = 10
+        
+        # Calcular paginación
+        total_pages = (total_records - 1) // records_per_page + 1
+        
+        if total_pages > 1:
+            page = st.selectbox(
+                f"Página (1 de {total_pages}):",
+                options=list(range(1, total_pages + 1)),
+                key="current_page"
+            )
+        else:
+            page = 1
+    
+    with col1:
+        # Calcular índices para la página actual
+        start_idx = (page - 1) * records_per_page
+        end_idx = min(start_idx + records_per_page, total_records)
+        
+        # Obtener datos de la página actual
+        page_data = df_history.iloc[start_idx:end_idx]
+        
+        st.markdown(f"**Mostrando registros {start_idx + 1} - {end_idx} de {total_records}**")
+    st.markdown("---")
+    
+    # Mostrar cada registro
+    for idx, row in page_data.iterrows():
+        # Crear un contenedor con borde
+        with st.container():
+            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+            
+            with col1:
+                st.markdown(f"""
+                **👤 Usuario:** {row['TIDENUSUA']} ({row['TIDENCODE']})
+                """)
+
+            with col2:
+                st.markdown(f"""
+                **📋 Número OL:** {row['TNUMEROOL']}
+                """)
+            
+            with col3:
+                fecha_formateada = row['TFECHCONS'].strftime("%d/%m/%Y %H:%M")
+                st.markdown(f"""
+                **📅 Fecha:**  
+                {fecha_formateada}
+                """)
+            
+            with col4:
+                # Botón para mostrar el detalle
+                if st.button(
+                    "👁️ Ver Detalle", 
+                    key=f"btn_detail_{idx}",
+                    use_container_width=True,
+                    type="secondary"
+                ):
+                    # Guardar en session_state el historial seleccionado
+                    st.session_state.history_detail = row['THISTCONS']
+                    st.session_state.show_history = False
+
+                    st.rerun()
+            
+            st.divider()
+    
+    # Mostrar información de paginación en la parte inferior
+    if total_pages > 1:
+        st.markdown(f"**Página {page} de {total_pages}**")
+    
+    # Mostrar detalle si se seleccionó algún registro
+    if st.session_state.get('show_detail', False):
+        show_history_detail()
+
+def show_history_detail():
+    """Función para mostrar el detalle del historial seleccionado"""
+    st.markdown("---")
+    st.subheader("🔍 Detalle del Historial")
+    st.markdown("---")
+
+    st.markdown(st.session_state.history_detail)    
 
 # ------------------------------- Estados iniciales ---------------------------------
 
@@ -944,7 +1075,6 @@ if "usercode" not in st.session_state:
 if "button_ols_disable" not in st.session_state:
     st.session_state.button_ols_disable = True
 
-# Sirve cuando generaremos la gráfica setearemos el valor de nuestro df calculado aquí
 if "ols_df" not in st.session_state:
     st.session_state.ols_df = pd.DataFrame()
 
@@ -957,11 +1087,16 @@ if "ol_selected" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state.history = ""
 
+if "show_history" not in st.session_state:
+    st.session_state.show_history = False
+
+if "history_detail" not in st.session_state:
+    st.session_state.history_detail = ""
+
 # ------------------------------------------------------------------------------------
 
 st.set_page_config(page_title="1er Matizado", page_icon="📊", layout="wide")
 st.set_option('deprecation.showPyplotGlobalUse', False)
-st.title("Análisis de Matizado - Primera Entrada")
 
 with st.spinner("Cargando usuario..."):
     if st.session_state.username is None:
@@ -978,8 +1113,10 @@ elif st.session_state.username == "Error expired":
 else:
     show_sidebar()
 
-    show_frontend()
-    if st.session_state.show_ols_df:
-        st.dataframe(st.session_state.ols_df)
-        st.session_state.show_ols_df = False
+    if st.session_state.show_history:
+        show_history()
+    elif st.session_state.history_detail != "":
+        show_history_detail()
+    else:
+        show_frontend()
 
